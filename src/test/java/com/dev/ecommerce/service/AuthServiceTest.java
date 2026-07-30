@@ -3,7 +3,6 @@ package com.dev.ecommerce.service;
 import com.dev.ecommerce.config.JwtProperties;
 import com.dev.ecommerce.dto.request.ForgotPasswordRequest;
 import com.dev.ecommerce.dto.request.LoginRequest;
-import com.dev.ecommerce.dto.request.RefreshTokenRequest;
 import com.dev.ecommerce.dto.request.RegisterRequest;
 import com.dev.ecommerce.dto.request.ResetPasswordRequest;
 import com.dev.ecommerce.dto.response.AuthResponse;
@@ -150,12 +149,9 @@ class AuthServiceTest {
 
     @Test
     void refreshToken_shouldRejectInvalidTokenType() {
-        RefreshTokenRequest request = new RefreshTokenRequest();
-        request.setRefreshToken("invalid-token");
-
         when(jwtTokenProvider.extractTokenType("invalid-token")).thenReturn("access");
 
-        assertThatThrownBy(() -> authService.refreshToken(request))
+        assertThatThrownBy(() -> authService.refreshToken("invalid-token", null))
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("Invalid refresh token");
     }
