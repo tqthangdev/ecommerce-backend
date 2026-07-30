@@ -72,10 +72,8 @@ public class AuthService {
         return buildAuthResponse(principal);
     }
 
-    public AuthResponse refreshToken(RefreshTokenRequest request) {
-        String refreshToken = request.getRefreshToken();
-
-        if (!"refresh".equals(jwtTokenProvider.extractTokenType(refreshToken))) {
+    public AuthResponse refreshToken(String refreshToken, String currentAccessToken) {
+        if (refreshToken == null || !"refresh".equals(jwtTokenProvider.extractTokenType(refreshToken))) {
             throw new BusinessException("Invalid refresh token", HttpStatus.UNAUTHORIZED);
         }
 
@@ -91,18 +89,22 @@ public class AuthService {
         }
 
         tokenService.revokeRefreshToken(user.getId(), tokenId);
+
+        // Blacklist old access token
+        if (currentAccessToken != null && "access".equals(jwtTokenProvider.extractTokenType(currentAccessToken))) {
+            String atId = jwtTokenProvider.extractTokenId(currentAccessToken);
+            long remainingMs = jwtTokenProvider.getRemainingExpirationMs(currentAccessToken);
+            tokenService.blacklistAccessToken(atId, remainingMs);
+        }
+
         return buildAuthResponse(principal);
     }
 
     public void logout(String accessToken, String refreshToken) {
-        if (accessToken != null && accessToken.startsWith("Bearer ")) {
-            accessToken = accessToken.substring(7);
-        }
-
         if (accessToken != null && "access".equals(jwtTokenProvider.extractTokenType(accessToken))) {
-            String accessTokenId = jwtTokenProvider.extractTokenId(accessToken);
+            String atId = jwtTokenProvider.extractTokenId(accessToken);
             long remainingMs = jwtTokenProvider.getRemainingExpirationMs(accessToken);
-            tokenService.blacklistAccessToken(accessTokenId, remainingMs);
+            tokenService.blacklistAccessToken(atId, remainingMs);
         }
 
         if (refreshToken != null && "refresh".equals(jwtTokenProvider.extractTokenType(refreshToken))) {
