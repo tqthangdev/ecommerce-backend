@@ -184,7 +184,9 @@ public class ProductService {
                 request.getStockQuantity() == null ? 0 : request.getStockQuantity(),
                 request.getImageUrl()
         );
-        return ProductMapper.toResponse(variantRepository.save(variant));
+        variantRepository.save(variant);
+        recalculateProduct(product);
+        return ProductMapper.toResponse(variant);
     }
 
     @Transactional
@@ -194,6 +196,7 @@ public class ProductService {
         if (!variant.getSku().equals(request.getSku()) && variantRepository.existsBySku(request.getSku())) {
             throw new BusinessException("SKU already exists: " + request.getSku(), HttpStatus.CONFLICT);
         }
+        Product product = variant.getProduct();
         variant.setSku(request.getSku());
         variant.setColor(request.getColor());
         variant.setSize(request.getSize());
@@ -202,15 +205,32 @@ public class ProductService {
             variant.setStockQuantity(request.getStockQuantity());
         }
         variant.setImageUrl(request.getImageUrl());
-        return ProductMapper.toResponse(variantRepository.save(variant));
+        variantRepository.save(variant);
+        recalculateProduct(product);
+        return ProductMapper.toResponse(variant);
     }
 
     @Transactional
     public void removeVariant(Long variantId) {
-        if (!variantRepository.existsById(variantId)) {
-            throw new ResourceNotFoundException("ProductVariant", variantId);
-        }
-        variantRepository.deleteById(variantId);
+        ProductVariant variant = variantRepository.findById(variantId)
+                .orElseThrow(() -> new ResourceNotFoundException("ProductVariant", variantId));
+        Product product = variant.getProduct();
+        product.getVariants().remove(variant);
+        variantRepository.delete(variant);
+        recalculateProduct(product);
+    }
+
+    private void recalculateProduct(Product product) {
+        int total = product.getVariants().stream()
+                .mapToInt(ProductVariant::getStockQuantity)
+                .sum();
+        product.setStockQuantity(total);
+        var cheapest = product.getVariants().stream()
+                .map(ProductVariant::getPrice)
+                .min(java.math.BigDecimal::compareTo)
+                .orElse(product.getBasePrice());
+        product.setBasePrice(cheapest);
+        productRepository.save(product);
     }
 
     @Transactional
