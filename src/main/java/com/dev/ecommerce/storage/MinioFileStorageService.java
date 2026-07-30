@@ -107,19 +107,8 @@ public class MinioFileStorageService implements FileStorageService {
     public String getUrl(String key) {
         if (!StringUtils.hasText(key)) return null;
         var minio = properties.getMinio();
-        try {
-            return minioClient.getPresignedObjectUrl(
-                    GetPresignedObjectUrlArgs.builder()
-                            .bucket(minio.getBucket())
-                            .object(key)
-                            .method(Method.GET)
-                            .expiry(7, TimeUnit.DAYS)
-                            .build()
-            );
-        } catch (Exception e) {
-            log.warn("Failed to build presigned URL for '{}': {}", key, e.getMessage());
-            return joinUrl(minio.getPublicUrl(), minio.getBucket(), key);
-        }
+        // Trả public URL trực tiếp (cần bucket public)
+        return joinUrl(minio.getPublicUrl(), minio.getBucket(), key);
     }
 
     private static String joinUrl(String... parts) {

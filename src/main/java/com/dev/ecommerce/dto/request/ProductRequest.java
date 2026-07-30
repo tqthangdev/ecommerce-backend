@@ -20,7 +20,6 @@ public class ProductRequest {
     @Size(max = 5000)
     private String description;
 
-    @NotNull
     @DecimalMin(value = "0.00", inclusive = true)
     private BigDecimal basePrice;
 

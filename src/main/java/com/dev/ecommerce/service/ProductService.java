@@ -69,7 +69,9 @@ public class ProductService {
         product.setName(request.getName());
         product.setSlug(slug);
         product.setDescription(request.getDescription());
-        product.setBasePrice(request.getBasePrice());
+        if (request.getBasePrice() != null) {
+            product.setBasePrice(request.getBasePrice());
+        }
         product.setDiscountPercent(
                 request.getDiscountPercent() == null ? java.math.BigDecimal.ZERO : request.getDiscountPercent()
         );
@@ -106,13 +108,9 @@ public class ProductService {
         product.setName(request.getName());
         product.setSlug(slug);
         product.setDescription(request.getDescription());
-        product.setBasePrice(request.getBasePrice());
         product.setDiscountPercent(
                 request.getDiscountPercent() == null ? java.math.BigDecimal.ZERO : request.getDiscountPercent()
         );
-        if (request.getStockQuantity() != null) {
-            product.setStockQuantity(request.getStockQuantity());
-        }
         if (request.getActive() != null) {
             product.setActive(request.getActive());
         }
