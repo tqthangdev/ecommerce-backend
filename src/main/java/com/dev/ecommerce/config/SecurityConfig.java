@@ -1,5 +1,6 @@
 package com.dev.ecommerce.config;
 
+import com.dev.ecommerce.security.CustomPreAuthenticationChecks;
 import com.dev.ecommerce.security.CustomUserDetailsService;
 import com.dev.ecommerce.security.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
@@ -91,6 +92,7 @@ public class SecurityConfig {
     AuthenticationProvider authenticationProvider() {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
         provider.setPasswordEncoder(passwordEncoder());
+        provider.setPreAuthenticationChecks(new CustomPreAuthenticationChecks());
         return provider;
     }
 
