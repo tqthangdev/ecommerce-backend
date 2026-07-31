@@ -27,10 +27,12 @@ public class AdminOrderController {
     @Operation(summary = "List all orders (admin)")
     public ApiResponse<PageResponse<OrderResponse>> list(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String keyword
     ) {
         Pageable pageable = PageRequest.of(page, size);
-        return ApiResponse.success("Orders fetched", orderService.getAdminOrders(pageable));
+        return ApiResponse.success("Orders fetched", orderService.getAdminOrders(pageable, status, keyword));
     }
 
     @GetMapping("/{id}")
