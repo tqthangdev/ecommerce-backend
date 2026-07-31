@@ -1,13 +1,11 @@
 spring:
   application:
     name: ecommerce
-
   datasource:
-    url: jdbc:mysql://localhost:3306/ecommerce_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh
-    username: root
-    password: root
+    url: ${DB_URL:jdbc:mysql://localhost:3306/ecommerce_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Ho_Chi_Minh}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
-
   jpa:
     hibernate:
       ddl-auto: validate
@@ -16,24 +14,20 @@ spring:
       hibernate:
         format_sql: true
     open-in-view: false
-
   flyway:
     enabled: true
     baseline-on-migrate: true
     locations: classpath:db/migration
-
   data:
     redis:
-      host: localhost
-      port: 6379
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
       timeout: 2000ms
-
   rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
-
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
   mail:
     host: localhost
     port: 1025
@@ -44,7 +38,6 @@ spring:
           auth: false
           starttls:
             enable: false
-
   servlet:
     multipart:
       enabled: true
@@ -67,11 +60,11 @@ app:
   storage:
     provider: ${STORAGE_PROVIDER:minio}
     minio:
-      endpoint: ${MINIO_ENDPOINT:http://minio.local:9000}
+      endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
       access-key: ${MINIO_ACCESS_KEY:admin}
       secret-key: ${MINIO_SECRET_KEY:password123}
       bucket: ${MINIO_BUCKET:ecommerce-product-images}
-      public-url: ${MINIO_PUBLIC_URL:http://minio.local:9000}
+      public-url: ${MINIO_PUBLIC_URL:http://localhost:9000}
     local:
       base-path: ${LOCAL_STORAGE_PATH:./uploads}
       public-url: ${LOCAL_STORAGE_PUBLIC_URL:/uploads}
