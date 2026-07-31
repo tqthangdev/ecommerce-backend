@@ -24,6 +24,9 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     Page<Order> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
 
+    @Query("SELECT o FROM Order o ORDER BY o.createdAt DESC")
+    Page<Order> findAllOrdersForAdmin(Pageable pageable);
+
     Optional<Order> findByIdempotencyKey(String idempotencyKey);
 
     Optional<Order> findByOrderNumber(String orderNumber);
@@ -43,4 +46,10 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     @Query("SELECT COALESCE(SUM(o.totalAmount), 0) FROM Order o WHERE o.userId = :userId AND o.paymentStatus = 'PAID'")
     BigDecimal totalSpentByUser(@Param("userId") Long userId);
+
+    @Query("SELECT COALESCE(SUM(o.totalAmount), 0) FROM Order o WHERE o.paymentStatus = 'PAID'")
+    BigDecimal getTotalRevenue();
+
+    @Query("SELECT o FROM Order o ORDER BY o.createdAt DESC")
+    List<Order> findTop5ByOrderByCreatedAtDesc(org.springframework.data.domain.Pageable pageable);
 }

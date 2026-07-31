@@ -2,9 +2,9 @@ package com.dev.ecommerce.controller;
 
 import com.dev.ecommerce.common.ApiResponse;
 import com.dev.ecommerce.dto.request.CheckoutRequest;
-import com.dev.ecommerce.dto.request.OrderStatusUpdateRequest;
 import com.dev.ecommerce.dto.response.CheckoutResponse;
 import com.dev.ecommerce.dto.response.OrderResponse;
+import com.dev.ecommerce.dto.response.PageResponse;
 import com.dev.ecommerce.security.UserPrincipal;
 import com.dev.ecommerce.service.OrderService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -16,8 +16,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/api/orders")
@@ -41,13 +39,13 @@ public class OrderController {
 
     @GetMapping
     @Operation(summary = "List user orders")
-    public ApiResponse<List<OrderResponse>> list(
+    public ApiResponse<PageResponse<OrderResponse>> list(
             @AuthenticationPrincipal UserPrincipal principal,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size
     ) {
         Pageable pageable = PageRequest.of(page, size);
-        return ApiResponse.success("Orders fetched", orderService.getUserOrders(principal.getId(), pageable));
+        return ApiResponse.success("Orders fetched", orderService.getUserOrderPage(principal.getId(), pageable));
     }
 
     @GetMapping("/{id}")

@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Page;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -167,6 +169,12 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public List<OrderResponse> getUserOrders(Long userId, org.springframework.data.domain.Pageable pageable) {
+        if (userId == null) {
+            return orderRepository.findAllOrdersForAdmin(pageable)
+                    .stream()
+                    .map(this::toOrderResponse)
+                    .collect(Collectors.toList());
+        }
         return orderRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable)
                 .stream()
                 .map(this::toOrderResponse)
@@ -174,9 +182,51 @@ public class OrderService {
     }
 
     @Transactional(readOnly = true)
+    public PageResponse<OrderResponse> getUserOrderPage(Long userId, org.springframework.data.domain.Pageable pageable) {
+        var page = orderRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable);
+        List<OrderResponse> content = page.getContent().stream()
+                .map(this::toOrderResponse)
+                .collect(Collectors.toList());
+
+        return PageResponse.<OrderResponse>builder()
+                .content(content)
+                .page(page.getNumber())
+                .size(page.getSize())
+                .totalElements(page.getTotalElements())
+                .totalPages(page.getTotalPages())
+                .first(page.isFirst())
+                .last(page.isLast())
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<OrderResponse> getAdminOrders(org.springframework.data.domain.Pageable pageable) {
+        var page = orderRepository.findAllOrdersForAdmin(pageable);
+        List<OrderResponse> content = page.getContent().stream()
+                .map(this::toOrderResponse)
+                .collect(Collectors.toList());
+
+        return PageResponse.<OrderResponse>builder()
+                .content(content)
+                .page(page.getNumber())
+                .size(page.getSize())
+                .totalElements(page.getTotalElements())
+                .totalPages(page.getTotalPages())
+                .first(page.isFirst())
+                .last(page.isLast())
+                .build();
+    }
+
+    @Transactional(readOnly = true)
     public OrderResponse getOrderById(Long userId, Long orderId) {
-        Order order = orderRepository.findByIdAndUserId(orderId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
+        Order order;
+        if (userId == null) {
+            order = orderRepository.findById(orderId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
+        } else {
+            order = orderRepository.findByIdAndUserId(orderId, userId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
+        }
         return toOrderResponse(order);
     }
 
