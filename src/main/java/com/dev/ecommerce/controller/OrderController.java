@@ -56,4 +56,13 @@ public class OrderController {
     ) {
         return ApiResponse.success("Order fetched", orderService.getOrderById(principal.getId(), id));
     }
+
+    @PostMapping("/{id}/cancel")
+    @Operation(summary = "Cancel order")
+    public ApiResponse<OrderResponse> cancel(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long id
+    ) {
+        return ApiResponse.success("Order cancelled", orderService.cancelOrder(principal.getId(), id));
+    }
 }

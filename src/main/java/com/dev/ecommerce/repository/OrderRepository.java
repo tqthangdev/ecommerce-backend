@@ -27,6 +27,14 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Query("SELECT o FROM Order o ORDER BY o.createdAt DESC")
     Page<Order> findAllOrdersForAdmin(Pageable pageable);
 
+    @Query("SELECT o FROM Order o WHERE (:status IS NULL OR o.status = :status) " +
+           "AND (:keyword IS NULL OR LOWER(o.orderNumber) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
+           "ORDER BY o.createdAt DESC")
+    Page<Order> findAllOrdersForAdminWithFilter(
+            @Param("status") OrderStatus status,
+            @Param("keyword") String keyword,
+            Pageable pageable);
+
     Optional<Order> findByIdempotencyKey(String idempotencyKey);
 
     Optional<Order> findByOrderNumber(String orderNumber);

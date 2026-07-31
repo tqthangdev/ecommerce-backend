@@ -200,8 +200,12 @@ public class OrderService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<OrderResponse> getAdminOrders(org.springframework.data.domain.Pageable pageable) {
-        var page = orderRepository.findAllOrdersForAdmin(pageable);
+    public PageResponse<OrderResponse> getAdminOrders(org.springframework.data.domain.Pageable pageable, String status, String keyword) {
+        var page = orderRepository.findAllOrdersForAdminWithFilter(
+                status != null && !status.isBlank() ? OrderStatus.valueOf(status) : null,
+                keyword != null && !keyword.isBlank() ? keyword : null,
+                pageable
+        );
         List<OrderResponse> content = page.getContent().stream()
                 .map(this::toOrderResponse)
                 .collect(Collectors.toList());
@@ -256,6 +260,37 @@ public class OrderService {
         }
 
         log.info("Order {} status updated: {} -> {}", order.getOrderNumber(), oldStatus, newStatus);
+        return toOrderResponse(order);
+    }
+
+    @Transactional
+    public OrderResponse cancelOrder(Long userId, Long orderId) {
+        Order order = orderRepository.findByIdAndUserId(orderId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
+
+        if (!order.isCancellable()) {
+            throw new BusinessException(
+                    "Order cannot be cancelled. Current status: " + order.getStatus(),
+                    HttpStatus.BAD_REQUEST
+            );
+        }
+
+        // Restore stock
+        for (OrderItem item : order.getItems()) {
+            inventoryService.restoreStock(item.getProductId(), item.getVariantId(), item.getQuantity());
+        }
+
+        // Refund if paid (except COD - cash collected on delivery)
+        if (order.getPaymentStatus() == PaymentStatus.PAID
+                && order.getPaymentMethod() != Order.PaymentMethod.COD) {
+            paymentService.refund(order.getPaymentReference());
+            order.setPaymentStatus(PaymentStatus.REFUNDED);
+        }
+
+        order.setStatus(OrderStatus.CANCELLED);
+        orderRepository.save(order);
+
+        log.info("Order {} cancelled by user {}", order.getOrderNumber(), userId);
         return toOrderResponse(order);
     }
 

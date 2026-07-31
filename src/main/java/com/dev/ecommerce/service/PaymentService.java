@@ -58,6 +58,10 @@ public class PaymentService {
         return true;
     }
 
+    public void refund(String paymentReference) {
+        processRefund(paymentReference, null);
+    }
+
     /**
      * Confirms COD payment — cash collected on delivery.
      */
