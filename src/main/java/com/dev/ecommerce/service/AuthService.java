@@ -16,23 +16,31 @@ import com.dev.ecommerce.repository.UserRepository;
 import com.dev.ecommerce.security.JwtTokenProvider;
 import com.dev.ecommerce.security.UserPrincipal;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthService {
 
     private static final long PASSWORD_RESET_EXPIRATION_MS = 900_000;
+
+    // --- Account lockout policy ---
+    private static final int MAX_FAILED_ATTEMPTS = 5;
+    private static final long LOCK_DURATION_MINUTES = 15;
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -63,13 +71,57 @@ public class AuthService {
         return buildAuthResponse(new UserPrincipal(user));
     }
 
+    /**
+     * Note: we look up the user by email BEFORE calling authenticationManager.authenticate()
+     * purely so that if authentication fails with BadCredentialsException, we have a User
+     * row to update the failed-attempt counter on. This lookup result is not used for any
+     * authentication decision — that responsibility stays entirely with authenticationManager
+     * (which re-fetches the user internally via CustomUserDetailsService).
+     */
+    @Transactional
     public AuthResponse login(LoginRequest request) {
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
-        );
+        User user = userRepository.findByEmail(request.getEmail()).orElse(null);
 
-        UserPrincipal principal = (UserPrincipal) authentication.getPrincipal();
-        return buildAuthResponse(principal);
+        try {
+            Authentication authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
+            );
+
+            UserPrincipal principal = (UserPrincipal) authentication.getPrincipal();
+
+            // Successful login: clear any stale failed-attempt state
+            if (user != null && (user.getFailedLoginAttempts() > 0 || user.getLockedUntil() != null)) {
+                user.setFailedLoginAttempts(0);
+                user.setLockedUntil(null);
+                userRepository.save(user);
+            }
+
+            return buildAuthResponse(principal);
+
+        } catch (BadCredentialsException ex) {
+            if (user != null) {
+                registerFailedAttempt(user);
+            }
+            throw ex;
+        }
+    }
+
+    private void registerFailedAttempt(User user) {
+        // If a previous lock has already expired, start the counter fresh
+        if (user.getLockedUntil() != null && user.getLockedUntil().isBefore(LocalDateTime.now())) {
+            user.setFailedLoginAttempts(0);
+            user.setLockedUntil(null);
+        }
+
+        int attempts = user.getFailedLoginAttempts() + 1;
+        user.setFailedLoginAttempts(attempts);
+
+        if (attempts >= MAX_FAILED_ATTEMPTS) {
+            user.setLockedUntil(LocalDateTime.now().plusMinutes(LOCK_DURATION_MINUTES));
+            log.warn("Account locked due to {} failed login attempts: {}", attempts, user.getEmail());
+        }
+
+        userRepository.save(user);
     }
 
     public AuthResponse refreshToken(String refreshToken, String currentAccessToken) {

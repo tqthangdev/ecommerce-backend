@@ -12,6 +12,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -33,6 +34,13 @@ public class User extends BaseEntity {
 
     @Column(nullable = false)
     private boolean enabled = true;
+
+    // --- Account locking ---
+    @Column(name = "failed_login_attempts", nullable = false)
+    private int failedLoginAttempts = 0;
+
+    @Column(name = "locked_until")
+    private LocalDateTime lockedUntil;
 
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(

@@ -6,6 +6,7 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -18,6 +19,7 @@ public class UserPrincipal implements UserDetails {
     private final String password;
     private final String fullName;
     private final boolean enabled;
+    private final LocalDateTime lockedUntil;
     private final Collection<? extends GrantedAuthority> authorities;
 
     public UserPrincipal(User user) {
@@ -26,6 +28,7 @@ public class UserPrincipal implements UserDetails {
         this.password = user.getPassword();
         this.fullName = user.getFullName();
         this.enabled = user.isEnabled();
+        this.lockedUntil = user.getLockedUntil();
         this.authorities = buildAuthorities(user);
     }
 
@@ -58,7 +61,7 @@ public class UserPrincipal implements UserDetails {
 
     @Override
     public boolean isAccountNonLocked() {
-        return true;
+        return lockedUntil == null || lockedUntil.isBefore(LocalDateTime.now());
     }
 
     @Override
