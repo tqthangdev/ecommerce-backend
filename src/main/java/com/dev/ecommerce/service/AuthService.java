@@ -3,7 +3,6 @@ package com.dev.ecommerce.service;
 import com.dev.ecommerce.config.JwtProperties;
 import com.dev.ecommerce.dto.request.ForgotPasswordRequest;
 import com.dev.ecommerce.dto.request.LoginRequest;
-import com.dev.ecommerce.dto.request.RefreshTokenRequest;
 import com.dev.ecommerce.dto.request.RegisterRequest;
 import com.dev.ecommerce.dto.request.ResetPasswordRequest;
 import com.dev.ecommerce.dto.response.AuthResponse;
@@ -38,7 +37,6 @@ public class AuthService {
 
     private static final long PASSWORD_RESET_EXPIRATION_MS = 900_000;
 
-    // --- Account lockout policy ---
     private static final int MAX_FAILED_ATTEMPTS = 5;
     private static final long LOCK_DURATION_MINUTES = 15;
 
@@ -65,32 +63,29 @@ public class AuthService {
                 passwordEncoder.encode(request.getPassword()),
                 request.getFullName()
         );
+
         user.getRoles().add(userRole);
         userRepository.save(user);
 
         return buildAuthResponse(new UserPrincipal(user));
     }
 
-    /**
-     * Note: we look up the user by email BEFORE calling authenticationManager.authenticate()
-     * purely so that if authentication fails with BadCredentialsException, we have a User
-     * row to update the failed-attempt counter on. This lookup result is not used for any
-     * authentication decision — that responsibility stays entirely with authenticationManager
-     * (which re-fetches the user internally via CustomUserDetailsService).
-     */
     @Transactional
     public AuthResponse login(LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail()).orElse(null);
 
         try {
             Authentication authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
+                    new UsernamePasswordAuthenticationToken(
+                            request.getEmail(),
+                            request.getPassword()
+                    )
             );
 
             UserPrincipal principal = (UserPrincipal) authentication.getPrincipal();
 
-            // Successful login: clear any stale failed-attempt state
-            if (user != null && (user.getFailedLoginAttempts() > 0 || user.getLockedUntil() != null)) {
+            if (user != null &&
+                    (user.getFailedLoginAttempts() > 0 || user.getLockedUntil() != null)) {
                 user.setFailedLoginAttempts(0);
                 user.setLockedUntil(null);
                 userRepository.save(user);
@@ -102,84 +97,130 @@ public class AuthService {
             if (user != null) {
                 registerFailedAttempt(user);
             }
+
             throw ex;
         }
     }
 
     private void registerFailedAttempt(User user) {
-        // If a previous lock has already expired, start the counter fresh
-        if (user.getLockedUntil() != null && user.getLockedUntil().isBefore(LocalDateTime.now())) {
+        if (user.getLockedUntil() != null &&
+                user.getLockedUntil().isBefore(LocalDateTime.now())) {
             user.setFailedLoginAttempts(0);
             user.setLockedUntil(null);
         }
 
         int attempts = user.getFailedLoginAttempts() + 1;
+
         user.setFailedLoginAttempts(attempts);
 
         if (attempts >= MAX_FAILED_ATTEMPTS) {
-            user.setLockedUntil(LocalDateTime.now().plusMinutes(LOCK_DURATION_MINUTES));
-            log.warn("Account locked due to {} failed login attempts: {}", attempts, user.getEmail());
+            user.setLockedUntil(
+                    LocalDateTime.now().plusMinutes(LOCK_DURATION_MINUTES)
+            );
+
+            log.warn(
+                    "Account locked due to {} failed login attempts: {}",
+                    attempts,
+                    user.getEmail()
+            );
         }
 
         userRepository.save(user);
     }
 
-    public AuthResponse refreshToken(String refreshToken, String currentAccessToken) {
-        if (refreshToken == null || !"refresh".equals(jwtTokenProvider.extractTokenType(refreshToken))) {
-            throw new BusinessException("Invalid refresh token", HttpStatus.UNAUTHORIZED);
+    @Transactional
+    public AuthResponse refreshToken(String refreshToken) {
+
+        if (refreshToken == null ||
+                !jwtTokenProvider.validateToken(refreshToken)) {
+
+            throw new BusinessException(
+                    "Invalid refresh token",
+                    HttpStatus.UNAUTHORIZED
+            );
+        }
+
+        if (!"refresh".equals(
+                jwtTokenProvider.extractTokenType(refreshToken))) {
+
+            throw new BusinessException(
+                    "Invalid token type",
+                    HttpStatus.UNAUTHORIZED
+            );
         }
 
         String email = jwtTokenProvider.extractUsername(refreshToken);
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new BusinessException("User not found", HttpStatus.UNAUTHORIZED));
 
-        UserPrincipal principal = new UserPrincipal(user);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new BusinessException(
+                        "User not found",
+                        HttpStatus.UNAUTHORIZED
+                ));
+
         String tokenId = jwtTokenProvider.extractTokenId(refreshToken);
 
-        if (!tokenService.isRefreshTokenValid(user.getId(), tokenId, refreshToken)) {
-            throw new BusinessException("Refresh token revoked or expired", HttpStatus.UNAUTHORIZED);
+        if (!tokenService.isRefreshTokenValid(
+                user.getId(),
+                tokenId,
+                refreshToken
+        )) {
+            throw new BusinessException(
+                    "Refresh token revoked or expired",
+                    HttpStatus.UNAUTHORIZED
+            );
         }
 
         tokenService.revokeRefreshToken(user.getId(), tokenId);
 
-        // Blacklist old access token
-        if (currentAccessToken != null && "access".equals(jwtTokenProvider.extractTokenType(currentAccessToken))) {
-            String atId = jwtTokenProvider.extractTokenId(currentAccessToken);
-            long remainingMs = jwtTokenProvider.getRemainingExpirationMs(currentAccessToken);
-            tokenService.blacklistAccessToken(atId, remainingMs);
-        }
-
-        return buildAuthResponse(principal);
+        return buildAuthResponse(new UserPrincipal(user));
     }
 
     public void logout(String accessToken, String refreshToken) {
-        if (accessToken != null && "access".equals(jwtTokenProvider.extractTokenType(accessToken))) {
-            String atId = jwtTokenProvider.extractTokenId(accessToken);
+        if (accessToken != null &&
+                "access".equals(jwtTokenProvider.extractTokenType(accessToken))) {
+
+            String tokenId = jwtTokenProvider.extractTokenId(accessToken);
             long remainingMs = jwtTokenProvider.getRemainingExpirationMs(accessToken);
-            tokenService.blacklistAccessToken(atId, remainingMs);
+
+            tokenService.blacklistAccessToken(tokenId, remainingMs);
         }
 
-        if (refreshToken != null && "refresh".equals(jwtTokenProvider.extractTokenType(refreshToken))) {
+        if (refreshToken != null &&
+                "refresh".equals(jwtTokenProvider.extractTokenType(refreshToken))) {
+
             String email = jwtTokenProvider.extractUsername(refreshToken);
-            userRepository.findByEmail(email).ifPresent(user -> {
-                String tokenId = jwtTokenProvider.extractTokenId(refreshToken);
-                tokenService.revokeRefreshToken(user.getId(), tokenId);
-            });
+
+            userRepository.findByEmail(email)
+                    .ifPresent(user -> {
+                        String tokenId = jwtTokenProvider.extractTokenId(refreshToken);
+                        tokenService.revokeRefreshToken(user.getId(), tokenId);
+                    });
         }
     }
 
     @Transactional(readOnly = true)
     public void forgotPassword(ForgotPasswordRequest request) {
-        userRepository.findByEmail(request.getEmail()).ifPresent(user -> {
-            String resetToken = UUID.randomUUID().toString();
-            tokenService.storePasswordResetToken(resetToken, user.getEmail(), PASSWORD_RESET_EXPIRATION_MS);
-            emailService.sendPasswordResetEmail(user.getEmail(), resetToken);
-        });
+        userRepository.findByEmail(request.getEmail())
+                .ifPresent(user -> {
+                    String resetToken = UUID.randomUUID().toString();
+
+                    tokenService.storePasswordResetToken(
+                            resetToken,
+                            user.getEmail(),
+                            PASSWORD_RESET_EXPIRATION_MS
+                    );
+
+                    emailService.sendPasswordResetEmail(
+                            user.getEmail(),
+                            resetToken
+                    );
+                });
     }
 
     @Transactional
     public void resetPassword(ResetPasswordRequest request) {
         String email = tokenService.getPasswordResetEmail(request.getToken());
+
         if (email == null) {
             throw new BusinessException("Invalid or expired reset token", HttpStatus.BAD_REQUEST);
         }
@@ -188,7 +229,9 @@ public class AuthService {
                 .orElseThrow(() -> new BusinessException("User not found", HttpStatus.NOT_FOUND));
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+
         userRepository.save(user);
+
         tokenService.revokePasswordResetToken(request.getToken());
         tokenService.revokeAllRefreshTokens(user.getId());
     }
@@ -198,7 +241,11 @@ public class AuthService {
         String refreshToken = jwtTokenProvider.generateRefreshToken(principal);
         String refreshTokenId = jwtTokenProvider.extractTokenId(refreshToken);
 
-        tokenService.storeRefreshToken(principal.getId(), refreshTokenId, refreshToken);
+        tokenService.storeRefreshToken(
+                principal.getId(),
+                refreshTokenId,
+                refreshToken
+        );
 
         Set<String> roles = principal.getAuthorities().stream()
                 .map(Object::toString)

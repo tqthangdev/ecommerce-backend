@@ -2,6 +2,8 @@ package com.dev.ecommerce.security;
 
 import com.dev.ecommerce.config.JwtProperties;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import lombok.RequiredArgsConstructor;
@@ -21,11 +23,19 @@ public class JwtTokenProvider {
     private final JwtProperties jwtProperties;
 
     public String generateAccessToken(UserDetails userDetails) {
-        return buildToken(userDetails.getUsername(), jwtProperties.getAccessTokenExpirationMs(), "access");
+        return buildToken(
+                userDetails.getUsername(),
+                jwtProperties.getAccessTokenExpirationMs(),
+                "access"
+        );
     }
 
     public String generateRefreshToken(UserDetails userDetails) {
-        return buildToken(userDetails.getUsername(), jwtProperties.getRefreshTokenExpirationMs(), "refresh");
+        return buildToken(
+                userDetails.getUsername(),
+                jwtProperties.getRefreshTokenExpirationMs(),
+                "refresh"
+        );
     }
 
     private String buildToken(String subject, long expirationMs, String type) {
@@ -42,6 +52,27 @@ public class JwtTokenProvider {
                 .compact();
     }
 
+    public boolean validateToken(String token) {
+        try {
+            getClaims(token);
+            return true;
+        } catch (JwtException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    public boolean isTokenValid(String token, UserDetails userDetails) {
+        try {
+            String username = extractUsername(token);
+
+            return username.equals(userDetails.getUsername())
+                    && !isTokenExpired(token);
+
+        } catch (JwtException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
     }
@@ -51,7 +82,10 @@ public class JwtTokenProvider {
     }
 
     public String extractTokenType(String token) {
-        return extractClaim(token, claims -> claims.get("type", String.class));
+        return extractClaim(
+                token,
+                claims -> claims.get("type", String.class)
+        );
     }
 
     public Date extractExpiration(String token) {
@@ -60,29 +94,39 @@ public class JwtTokenProvider {
 
     public long getRemainingExpirationMs(String token) {
         Date expiration = extractExpiration(token);
-        return Math.max(expiration.getTime() - System.currentTimeMillis(), 0);
-    }
 
-    public boolean isTokenValid(String token, UserDetails userDetails) {
-        String username = extractUsername(token);
-        return username.equals(userDetails.getUsername()) && !isTokenExpired(token);
+        return Math.max(
+                expiration.getTime() - System.currentTimeMillis(),
+                0
+        );
     }
 
     public boolean isTokenExpired(String token) {
-        return extractExpiration(token).before(new Date());
+        return extractExpiration(token)
+                .before(new Date());
     }
 
-    private <T> T extractClaim(String token, Function<Claims, T> resolver) {
-        Claims claims = Jwts.parser()
+    private <T> T extractClaim(
+            String token,
+            Function<Claims, T> resolver
+    ) {
+        Claims claims = getClaims(token);
+
+        return resolver.apply(claims);
+    }
+
+    private Claims getClaims(String token) {
+        return Jwts.parser()
                 .verifyWith(getSigningKey())
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
-        return resolver.apply(claims);
     }
 
     private SecretKey getSigningKey() {
-        byte[] keyBytes = jwtProperties.getSecret().getBytes(StandardCharsets.UTF_8);
+        byte[] keyBytes = jwtProperties.getSecret()
+                .getBytes(StandardCharsets.UTF_8);
+
         return Keys.hmacShaKeyFor(keyBytes);
     }
 }

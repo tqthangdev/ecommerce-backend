@@ -26,7 +26,6 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Optional;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -77,7 +76,12 @@ class AuthServiceTest {
         userRole = new Role(RoleName.USER);
         userRole.setId(1L);
 
-        user = new User("test@example.com", "encoded-password", "Test User");
+        user = new User(
+                "test@example.com",
+                "encoded-password",
+                "Test User"
+        );
+
         user.setId(1L);
         user.getRoles().add(userRole);
 
@@ -87,39 +91,68 @@ class AuthServiceTest {
     @Test
     void register_shouldCreateUserAndReturnTokens() {
         RegisterRequest request = new RegisterRequest();
+
         request.setEmail("new@example.com");
         request.setPassword("password123");
         request.setFullName("New User");
 
-        when(userRepository.existsByEmail("new@example.com")).thenReturn(false);
-        when(roleRepository.findByName(RoleName.USER)).thenReturn(Optional.of(userRole));
-        when(passwordEncoder.encode("password123")).thenReturn("encoded-password");
-        when(userRepository.save(any(User.class))).thenAnswer(invocation -> {
-            User saved = invocation.getArgument(0);
-            saved.setId(2L);
-            return saved;
-        });
-        when(jwtTokenProvider.generateAccessToken(any())).thenReturn("access-token");
-        when(jwtTokenProvider.generateRefreshToken(any())).thenReturn("refresh-token");
-        when(jwtTokenProvider.extractTokenId("refresh-token")).thenReturn("refresh-id");
-        when(jwtProperties.getAccessTokenExpirationMs()).thenReturn(900_000L);
+        when(userRepository.existsByEmail("new@example.com"))
+                .thenReturn(false);
+
+        when(roleRepository.findByName(RoleName.USER))
+                .thenReturn(Optional.of(userRole));
+
+        when(passwordEncoder.encode("password123"))
+                .thenReturn("encoded-password");
+
+        when(userRepository.save(any(User.class)))
+                .thenAnswer(invocation -> {
+                    User saved = invocation.getArgument(0);
+                    saved.setId(2L);
+                    return saved;
+                });
+
+        when(jwtTokenProvider.generateAccessToken(any()))
+                .thenReturn("access-token");
+
+        when(jwtTokenProvider.generateRefreshToken(any()))
+                .thenReturn("refresh-token");
+
+        when(jwtTokenProvider.extractTokenId("refresh-token"))
+                .thenReturn("refresh-id");
+
+        when(jwtProperties.getAccessTokenExpirationMs())
+                .thenReturn(900_000L);
 
         AuthResponse response = authService.register(request);
 
-        assertThat(response.getAccessToken()).isEqualTo("access-token");
-        assertThat(response.getRefreshToken()).isEqualTo("refresh-token");
-        assertThat(response.getUser().getEmail()).isEqualTo("new@example.com");
-        verify(tokenService).storeRefreshToken(eq(2L), eq("refresh-id"), eq("refresh-token"));
+        assertThat(response.getAccessToken())
+                .isEqualTo("access-token");
+
+        assertThat(response.getRefreshToken())
+                .isEqualTo("refresh-token");
+
+        assertThat(response.getUser().getEmail())
+                .isEqualTo("new@example.com");
+
+        verify(tokenService)
+                .storeRefreshToken(
+                        eq(2L),
+                        eq("refresh-id"),
+                        eq("refresh-token")
+                );
     }
 
     @Test
     void register_shouldRejectDuplicateEmail() {
         RegisterRequest request = new RegisterRequest();
+
         request.setEmail("test@example.com");
         request.setPassword("password123");
         request.setFullName("Test User");
 
-        when(userRepository.existsByEmail("test@example.com")).thenReturn(true);
+        when(userRepository.existsByEmail("test@example.com"))
+                .thenReturn(true);
 
         assertThatThrownBy(() -> authService.register(request))
                 .isInstanceOf(BusinessException.class)
@@ -131,66 +164,119 @@ class AuthServiceTest {
     @Test
     void login_shouldReturnTokens() {
         LoginRequest request = new LoginRequest();
+
         request.setEmail("test@example.com");
         request.setPassword("password123");
 
-        when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
-                .thenReturn(new UsernamePasswordAuthenticationToken(userPrincipal, null, userPrincipal.getAuthorities()));
-        when(jwtTokenProvider.generateAccessToken(userPrincipal)).thenReturn("access-token");
-        when(jwtTokenProvider.generateRefreshToken(userPrincipal)).thenReturn("refresh-token");
-        when(jwtTokenProvider.extractTokenId("refresh-token")).thenReturn("refresh-id");
-        when(jwtProperties.getAccessTokenExpirationMs()).thenReturn(900_000L);
+        when(authenticationManager.authenticate(
+                any(UsernamePasswordAuthenticationToken.class)
+        )).thenReturn(
+                new UsernamePasswordAuthenticationToken(
+                        userPrincipal,
+                        null,
+                        userPrincipal.getAuthorities()
+                )
+        );
+
+        when(jwtTokenProvider.generateAccessToken(userPrincipal))
+                .thenReturn("access-token");
+
+        when(jwtTokenProvider.generateRefreshToken(userPrincipal))
+                .thenReturn("refresh-token");
+
+        when(jwtTokenProvider.extractTokenId("refresh-token"))
+                .thenReturn("refresh-id");
+
+        when(jwtProperties.getAccessTokenExpirationMs())
+                .thenReturn(900_000L);
 
         AuthResponse response = authService.login(request);
 
-        assertThat(response.getAccessToken()).isEqualTo("access-token");
-        assertThat(response.getUser().getRoles()).contains("USER");
+        assertThat(response.getAccessToken())
+                .isEqualTo("access-token");
+
+        assertThat(response.getUser().getRoles())
+                .contains("USER");
     }
 
     @Test
     void refreshToken_shouldRejectInvalidTokenType() {
-        when(jwtTokenProvider.extractTokenType("invalid-token")).thenReturn("access");
+        when(jwtTokenProvider.validateToken("invalid-token"))
+                .thenReturn(true);
 
-        assertThatThrownBy(() -> authService.refreshToken("invalid-token", null))
+        when(jwtTokenProvider.extractTokenType("invalid-token"))
+                .thenReturn("access");
+
+        assertThatThrownBy(() ->
+                authService.refreshToken("invalid-token")
+        )
                 .isInstanceOf(BusinessException.class)
-                .hasMessage("Invalid refresh token");
+                .hasMessage("Invalid token type");
     }
 
     @Test
     void forgotPassword_shouldSendEmailWhenUserExists() {
         ForgotPasswordRequest request = new ForgotPasswordRequest();
+
         request.setEmail("test@example.com");
 
-        when(userRepository.findByEmail("test@example.com")).thenReturn(Optional.of(user));
+        when(userRepository.findByEmail("test@example.com"))
+                .thenReturn(Optional.of(user));
 
         authService.forgotPassword(request);
 
-        verify(tokenService).storePasswordResetToken(anyString(), eq("test@example.com"), eq(900_000L));
-        verify(emailService).sendPasswordResetEmail(eq("test@example.com"), anyString());
+        verify(tokenService)
+                .storePasswordResetToken(
+                        anyString(),
+                        eq("test@example.com"),
+                        eq(900_000L)
+                );
+
+        verify(emailService)
+                .sendPasswordResetEmail(
+                        eq("test@example.com"),
+                        anyString()
+                );
     }
 
     @Test
     void forgotPassword_shouldNotRevealMissingUser() {
         ForgotPasswordRequest request = new ForgotPasswordRequest();
+
         request.setEmail("missing@example.com");
 
-        when(userRepository.findByEmail("missing@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("missing@example.com"))
+                .thenReturn(Optional.empty());
 
         authService.forgotPassword(request);
 
-        verify(tokenService, never()).storePasswordResetToken(anyString(), anyString(), anyLong());
-        verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString());
+        verify(tokenService, never())
+                .storePasswordResetToken(
+                        anyString(),
+                        anyString(),
+                        anyLong()
+                );
+
+        verify(emailService, never())
+                .sendPasswordResetEmail(
+                        anyString(),
+                        anyString()
+                );
     }
 
     @Test
     void resetPassword_shouldRejectInvalidToken() {
         ResetPasswordRequest request = new ResetPasswordRequest();
+
         request.setToken("bad-token");
         request.setNewPassword("newpassword123");
 
-        when(tokenService.getPasswordResetEmail("bad-token")).thenReturn(null);
+        when(tokenService.getPasswordResetEmail("bad-token"))
+                .thenReturn(null);
 
-        assertThatThrownBy(() -> authService.resetPassword(request))
+        assertThatThrownBy(() ->
+                authService.resetPassword(request)
+        )
                 .isInstanceOf(BusinessException.class)
                 .hasMessage("Invalid or expired reset token");
     }

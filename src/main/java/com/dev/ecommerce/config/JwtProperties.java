@@ -16,10 +16,4 @@ public class JwtProperties {
     private String secret = "your-256-bit-secret-key-for-dev-only-change-in-prod!!";
     private long accessTokenExpirationMs = 900_000;
     private long refreshTokenExpirationMs = 604_800_000;
-
-    @PostConstruct
-    void logConfig() {
-        log.info("JWT config loaded — secret length: {} chars, access expiry: {}ms, refresh expiry: {}ms",
-                secret.length(), accessTokenExpirationMs, refreshTokenExpirationMs);
-    }
 }
