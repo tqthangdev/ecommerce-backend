@@ -4,6 +4,7 @@ import com.dev.ecommerce.common.ApiResponse;
 import com.dev.ecommerce.dto.request.ProductRequest;
 import com.dev.ecommerce.dto.request.ProductSearchRequest;
 import com.dev.ecommerce.dto.request.ProductVariantRequest;
+import com.dev.ecommerce.dto.request.ProductImageUrlRequest;
 import com.dev.ecommerce.dto.response.PageResponse;
 import com.dev.ecommerce.dto.response.ProductImageResponse;
 import com.dev.ecommerce.dto.response.ProductResponse;
@@ -18,6 +19,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.MediaType;
 
 @RestController
 @RequestMapping("/api/admin/products")
@@ -108,5 +110,15 @@ public class AdminProductController {
     @Operation(summary = "Set image as primary")
     public ApiResponse<ProductImageResponse> setPrimaryImage(@PathVariable Long imageId) {
         return ApiResponse.success("Primary image updated", productService.setPrimaryImage(imageId));
+    }
+
+    @PostMapping(value = "/{id}/images", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Add a product image by URL")
+    public ApiResponse<ProductImageResponse> addImageByUrl(
+            @PathVariable Long id,
+            @Valid @RequestBody ProductImageUrlRequest request
+    ) {
+        return ApiResponse.success("Image added", productService.addImageByUrl(id, request.getImageUrl()));
     }
 }

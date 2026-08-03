@@ -248,6 +248,21 @@ public class ProductService {
     }
 
     @Transactional
+    public ProductImageResponse addImageByUrl(Long productId, String imageUrl) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ResourceNotFoundException("Product", productId));
+
+        int nextOrder = product.getImages().stream()
+                .mapToInt(ProductImage::getDisplayOrder)
+                .max()
+                .orElse(-1) + 1;
+        boolean isFirst = product.getImages().isEmpty();
+
+        ProductImage image = new ProductImage(product, imageUrl, null, nextOrder, isFirst);
+        return ProductMapper.toResponse(imageRepository.save(image));
+    }
+
+    @Transactional
     public void removeImage(Long imageId) {
         ProductImage image = imageRepository.findById(imageId)
                 .orElseThrow(() -> new ResourceNotFoundException("ProductImage", imageId));
