@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/admin/orders")
 @RequiredArgsConstructor
-@PreAuthorize("hasRole('ADMIN')")
+@PreAuthorize("hasAnyRole('OWNER','ADMIN')")
 @Tag(name = "Admin - Orders", description = "Admin order management")
 public class AdminOrderController {
 

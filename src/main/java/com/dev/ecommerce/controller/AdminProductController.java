@@ -25,7 +25,7 @@ import org.springframework.http.MediaType;
 @RequestMapping("/api/admin/products")
 @RequiredArgsConstructor
 @Validated
-@PreAuthorize("hasRole('ADMIN')")
+@PreAuthorize("hasAnyRole('OWNER','ADMIN')")
 @Tag(name = "Admin - Products", description = "Admin CRUD operations for products, variants, and images")
 public class AdminProductController {
 

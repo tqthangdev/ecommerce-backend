@@ -45,6 +45,10 @@ spring:
       max-request-size: 10MB
 
 app:
+  owner:
+    email: ${OWNER_EMAIL:owner@eshop.com}
+    password: ${OWNER_PASSWORD:owner@123}
+    full-name: ${OWNER_FULL_NAME:Shop Owner}
   admin:
     email: ${ADMIN_EMAIL:admin@eshop.com}
     password: ${ADMIN_PASSWORD:admin@123}
