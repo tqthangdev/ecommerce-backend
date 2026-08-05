@@ -39,6 +39,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 @Slf4j
@@ -73,7 +74,7 @@ public class ProductService {
             product.setBasePrice(request.getBasePrice());
         }
         product.setDiscountPercent(
-                request.getDiscountPercent() == null ? java.math.BigDecimal.ZERO : request.getDiscountPercent()
+                request.getDiscountPercent() == null ? BigDecimal.ZERO : request.getDiscountPercent()
         );
         if (request.getStockQuantity() != null) {
             product.setStockQuantity(request.getStockQuantity());
@@ -109,7 +110,7 @@ public class ProductService {
         product.setSlug(slug);
         product.setDescription(request.getDescription());
         product.setDiscountPercent(
-                request.getDiscountPercent() == null ? java.math.BigDecimal.ZERO : request.getDiscountPercent()
+                request.getDiscountPercent() == null ? BigDecimal.ZERO : request.getDiscountPercent()
         );
         if (request.getActive() != null) {
             product.setActive(request.getActive());
@@ -135,9 +136,25 @@ public class ProductService {
         productRepository.delete(product);
     }
 
+    // Cached per product id so InventoryService can evict exactly this one entry
+    // after a stock change, without touching other products or the search cache.
     @Transactional(readOnly = true)
+    @Cacheable(value = CacheConfig.CACHE_PRODUCT_DETAIL, key = "#id")
     public ProductResponse getById(Long id) {
         return ProductMapper.toResponse(loadWithDetails(id));
+    }
+
+    /**
+     * Evicts only the CACHE_PRODUCT_DETAIL entry for this product id (keyed the same
+     * way as getById's @Cacheable). Intended to be called by InventoryService after a
+     * stock-only change (order deduct/restore) — cheap and precise, unlike the
+     * allEntries=true evictions used by create/update/delete/addVariant/etc., which
+     * also cover CACHE_PRODUCTS (search results) because those operations can change
+     * more than just quantity (price, active flag, images, category/brand...).
+     */
+    @CacheEvict(value = CacheConfig.CACHE_PRODUCT_DETAIL, key = "#id")
+    public void evictProductDetailCache(Long id) {
+        // body intentionally empty — eviction happens via the annotation
     }
 
     @Transactional(readOnly = true)
@@ -166,7 +183,15 @@ public class ProductService {
         ));
     }
 
+    /**
+     * NOTE on @CacheEvict placement: this method calls recalculateProduct(...) via a
+     * plain internal (this.) call, which is a Spring AOP *self-invocation* — it bypasses
+     * the proxy entirely, so any @CacheEvict/@Transactional annotation placed on
+     * recalculateProduct itself would never actually run when called from here. That's
+     * why the eviction is declared on this method (the real, proxied entry point) instead.
+     */
     @Transactional
+    @CacheEvict(value = {CacheConfig.CACHE_PRODUCTS, CacheConfig.CACHE_PRODUCT_DETAIL}, allEntries = true)
     public ProductVariantResponse addVariant(Long productId, ProductVariantRequest request) {
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", productId));
@@ -183,18 +208,19 @@ public class ProductService {
                 request.getImageUrl()
         );
         variantRepository.save(variant);
-        recalculateProduct(product);
+        recalculateProduct(product.getId());
         return ProductMapper.toResponse(variant);
     }
 
+    // See note on addVariant regarding @CacheEvict + self-invocation.
     @Transactional
+    @CacheEvict(value = {CacheConfig.CACHE_PRODUCTS, CacheConfig.CACHE_PRODUCT_DETAIL}, allEntries = true)
     public ProductVariantResponse updateVariant(Long variantId, ProductVariantRequest request) {
         ProductVariant variant = variantRepository.findById(variantId)
                 .orElseThrow(() -> new ResourceNotFoundException("ProductVariant", variantId));
         if (!variant.getSku().equals(request.getSku()) && variantRepository.existsBySku(request.getSku())) {
             throw new BusinessException("SKU already exists: " + request.getSku(), HttpStatus.CONFLICT);
         }
-        Product product = variant.getProduct();
         variant.setSku(request.getSku());
         variant.setColor(request.getColor());
         variant.setSize(request.getSize());
@@ -204,34 +230,61 @@ public class ProductService {
         }
         variant.setImageUrl(request.getImageUrl());
         variantRepository.save(variant);
-        recalculateProduct(product);
+        recalculateProduct(variant.getProduct().getId());
         return ProductMapper.toResponse(variant);
     }
 
+    // See note on addVariant regarding @CacheEvict + self-invocation.
     @Transactional
+    @CacheEvict(value = {CacheConfig.CACHE_PRODUCTS, CacheConfig.CACHE_PRODUCT_DETAIL}, allEntries = true)
     public void removeVariant(Long variantId) {
         ProductVariant variant = variantRepository.findById(variantId)
                 .orElseThrow(() -> new ResourceNotFoundException("ProductVariant", variantId));
+        Long productId = variant.getProduct().getId();
         Product product = variant.getProduct();
         product.getVariants().remove(variant);
         variantRepository.delete(variant);
-        recalculateProduct(product);
+        recalculateProduct(productId);
     }
 
-    private void recalculateProduct(Product product) {
+    /**
+     * Full resync of Product.stockQuantity (sum of variants) and basePrice (cheapest
+     * variant price) from scratch. Used whenever the variant SET or a variant PRICE
+     * changes (add/update/remove variant here in ProductService).
+     *
+     * Do NOT call this from order checkout/cancel flows — those only change quantities,
+     * never price or the variant set, so they use the lightweight atomic
+     * ProductRepository.adjustStockQuantity(id, delta) in InventoryService instead
+     * (cheaper, and avoids reloading all variants under an already-locked row).
+     *
+     * No @CacheEvict here on purpose: when called externally (e.g. an admin "resync"
+     * endpoint) callers should evict at their own call site; when called internally
+     * from addVariant/updateVariant/removeVariant, the eviction on those methods
+     * already covers it (see note above about self-invocation).
+     */
+    @Transactional
+    public void recalculateProduct(Long productId) {
+        Product product = productRepository.findWithDetailsById(productId)
+                .orElseThrow(() -> new ResourceNotFoundException("Product", productId));
+
         int total = product.getVariants().stream()
                 .mapToInt(ProductVariant::getStockQuantity)
                 .sum();
+
         product.setStockQuantity(total);
-        var cheapest = product.getVariants().stream()
+
+        BigDecimal cheapest = product.getVariants().stream()
                 .map(ProductVariant::getPrice)
-                .min(java.math.BigDecimal::compareTo)
+                .min(BigDecimal::compareTo)
                 .orElse(product.getBasePrice());
+
         product.setBasePrice(cheapest);
+
         productRepository.save(product);
     }
 
     @Transactional
+    @CacheEvict(value = {CacheConfig.CACHE_PRODUCTS, CacheConfig.CACHE_PRODUCT_DETAIL}, allEntries = true)
     public ProductImageResponse uploadImage(Long productId, MultipartFile file) {
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", productId));
@@ -248,6 +301,7 @@ public class ProductService {
     }
 
     @Transactional
+    @CacheEvict(value = {CacheConfig.CACHE_PRODUCTS, CacheConfig.CACHE_PRODUCT_DETAIL}, allEntries = true)
     public ProductImageResponse addImageByUrl(Long productId, String imageUrl) {
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", productId));
@@ -263,6 +317,7 @@ public class ProductService {
     }
 
     @Transactional
+    @CacheEvict(value = {CacheConfig.CACHE_PRODUCTS, CacheConfig.CACHE_PRODUCT_DETAIL}, allEntries = true)
     public void removeImage(Long imageId) {
         ProductImage image = imageRepository.findById(imageId)
                 .orElseThrow(() -> new ResourceNotFoundException("ProductImage", imageId));
@@ -271,6 +326,7 @@ public class ProductService {
     }
 
     @Transactional
+    @CacheEvict(value = {CacheConfig.CACHE_PRODUCTS, CacheConfig.CACHE_PRODUCT_DETAIL}, allEntries = true)
     public ProductImageResponse setPrimaryImage(Long imageId) {
         ProductImage image = imageRepository.findById(imageId)
                 .orElseThrow(() -> new ResourceNotFoundException("ProductImage", imageId));

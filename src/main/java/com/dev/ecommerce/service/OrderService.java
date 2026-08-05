@@ -1,13 +1,11 @@
 package com.dev.ecommerce.service;
 
-import com.dev.ecommerce.dto.request.ApplyCouponRequest;
 import com.dev.ecommerce.dto.request.CheckoutRequest;
 import com.dev.ecommerce.dto.request.OrderStatusUpdateRequest;
 import com.dev.ecommerce.dto.response.*;
 import com.dev.ecommerce.entity.*;
 import com.dev.ecommerce.entity.Order.OrderStatus;
 import com.dev.ecommerce.entity.Order.PaymentStatus;
-import com.dev.ecommerce.exception.BusinessException;
 import com.dev.ecommerce.exception.ResourceNotFoundException;
 import com.dev.ecommerce.messaging.event.OrderCreatedEvent;
 import com.dev.ecommerce.messaging.producer.OrderEventProducer;
@@ -16,18 +14,12 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.UUID;
 import java.util.stream.Collectors;
-
-import org.springframework.data.domain.Page;
 
 @Slf4j
 @Service
@@ -35,132 +27,71 @@ import org.springframework.data.domain.Page;
 public class OrderService {
 
     private final OrderRepository orderRepository;
-    private final OrderItemRepository orderItemRepository;
     private final IdempotencyRepository idempotencyRepository;
-    private final AddressRepository addressRepository;
-    private final ProductRepository productRepository;
-    private final ProductVariantRepository variantRepository;
     private final CartRedisService cartRedisService;
-    private final InventoryService inventoryService;
     private final PaymentService paymentService;
     private final CouponService couponService;
     private final JsonMapper jsonMapper;
     private final OrderEventProducer orderEventProducer;
     private final UserRepository userRepository;
+    private final CouponRepository couponRepository;
+    // All @Transactional DB work lives here — see OrderTransactionalOps javadoc for why
+    // it must be a separate bean rather than protected methods on this class.
+    private final OrderTransactionalOps orderTx;
 
-    @Transactional
+    /**
+     * Public entry point. NOT @Transactional at this level on purpose:
+     * step 1 (create order + deduct stock) commits in its own short transaction
+     * (inside orderTx, a different bean — so its @Transactional actually applies),
+     * then the payment gateway call happens OUTSIDE any DB transaction so we never
+     * hold row locks (from deductStock) while waiting on a network call to
+     * VNPay/Momo/Stripe/etc. Step 3 persists the payment result in a second short
+     * transaction.
+     */
     public CheckoutResponse checkout(Long userId, CheckoutRequest request, String idempotencyKey) {
-        // 1. Idempotency check
+        // 0. Idempotency check (best-effort fast path; the authoritative check is the
+        // unique constraint on idempotency_key, handled in orderTx.createOrderAndDeductStock).
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             var existing = orderRepository.findByIdempotencyKey(idempotencyKey);
             if (existing.isPresent()) {
-                Order existingOrder = existing.get();
-                return buildCheckoutResponse(existingOrder, null);
+                return buildCheckoutResponse(existing.get(), null);
             }
         }
 
-        // 2. Fetch cart
-        CartResponse cart = cartRedisService.getCart(userId);
-        if (cart.getItems().isEmpty()) {
-            throw new BusinessException("Cart is empty", HttpStatus.BAD_REQUEST);
-        }
+        // 1. Create order + deduct stock, all in one short DB transaction.
+        Order savedOrder = orderTx.createOrderAndDeductStock(userId, request, idempotencyKey);
 
-        // 3. Validate stock for all items
-        for (CartItemResponse item : cart.getItems()) {
-            inventoryService.validateStock(item.getProductId(), item.getVariantId(), item.getQuantity());
-        }
-
-        // 4. Fetch address
-        Address address = addressRepository.findByIdAndUserId(request.getAddressId(), userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Address", request.getAddressId()));
-
-        // 5. Calculate totals
-        BigDecimal subtotal = cart.getSubtotal();
-        BigDecimal shippingFee = calculateShippingFee(subtotal);
-        BigDecimal discountAmount = BigDecimal.ZERO;
-
-        if (request.getCouponCode() != null && !request.getCouponCode().isBlank()) {
-            ApplyCouponRequest couponReq = new ApplyCouponRequest();
-            couponReq.setCode(request.getCouponCode());
-            couponReq.setOrderAmount(subtotal);
-            CouponValidationResponse validation = couponService.validateAndCalculate(couponReq);
-            if (!validation.isValid()) {
-                throw new BusinessException(validation.getMessage(), HttpStatus.BAD_REQUEST);
-            }
-            discountAmount = validation.getDiscountAmount();
-        }
-
-        BigDecimal total = subtotal.add(shippingFee).subtract(discountAmount);
-
-        // 6. Create order
-        Order order = new Order();
-        order.setUserId(userId);
-        order.setOrderNumber(generateOrderNumber());
-        order.setShippingAddress(address);
-        order.setSubtotal(subtotal);
-        order.setShippingFee(shippingFee);
-        order.setDiscountAmount(discountAmount);
-        order.setTotalAmount(total);
-        order.setCouponCode(request.getCouponCode());
-        order.setPaymentMethod(request.getPaymentMethod());
-        order.setPaymentStatus(PaymentStatus.UNPAID);
-        order.setNotes(request.getNotes());
-        order.setIdempotencyKey(idempotencyKey);
-        order.setStatus(OrderStatus.PENDING);
-
-        // 7. Create order items & deduct stock
-        for (CartItemResponse cartItem : cart.getItems()) {
-            BigDecimal itemPrice = cartItem.getEffectivePrice();
-            BigDecimal itemSubtotal = itemPrice.multiply(BigDecimal.valueOf(cartItem.getQuantity()));
-
-            OrderItem orderItem = new OrderItem(
-                    cartItem.getProductId(),
-                    cartItem.getProductName(),
-                    cartItem.getProductSlug(),
-                    cartItem.getVariantId(),
-                    cartItem.getVariantSku(),
-                    cartItem.getColor(),
-                    cartItem.getSize(),
-                    cartItem.getQuantity(),
-                    cartItem.getUnitPrice(),
-                    itemPrice
-            );
-            order.addItem(orderItem);
-
-            // Deduct stock with pessimistic lock
-            inventoryService.deductStock(cartItem.getProductId(), cartItem.getVariantId(), cartItem.getQuantity());
-        }
-
-        Order savedOrder = orderRepository.save(order);
-
-        // 8. Process payment
+        // 2. Process payment OUTSIDE the DB transaction — no locks held during the
+        // external call.
         String paymentUrl = null;
         if (request.getPaymentMethod() != Order.PaymentMethod.COD) {
             paymentUrl = paymentService.createPaymentSession(savedOrder);
         } else {
-            savedOrder.setPaymentStatus(PaymentStatus.PAID);
-            savedOrder.setPaymentReference("COD-" + savedOrder.getOrderNumber());
-            orderRepository.save(savedOrder);
+            orderTx.markOrderPaidCod(savedOrder.getId());
         }
 
-        // 9. Increment coupon usage
-        if (request.getCouponId() != null) {
+        // 3. Increment coupon usage (best-effort, does not affect order success)
+        if (request.getCouponCode() != null && !request.getCouponCode().isBlank()) {
             try {
-                couponService.incrementUsage(request.getCouponId());
+                Coupon coupon = couponRepository.findByCode(request.getCouponCode())
+                        .orElseThrow(() -> new ResourceNotFoundException("Coupon", request.getCouponCode()));
+
+                couponService.incrementUsage(coupon.getId());
             } catch (Exception e) {
-                log.warn("Failed to increment coupon usage: {}", e.getMessage());
+                log.warn("Failed to increment coupon usage for code {}: {}",
+                        request.getCouponCode(), e.getMessage());
             }
         }
 
-        // 10. Save idempotency record
-        if (idempotencyKey != null) {
+        // 4. Save idempotency record
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             saveIdempotencyRecord(idempotencyKey, userId, savedOrder);
         }
 
-        // 11. Clear cart
+        // 5. Clear cart
         cartRedisService.clearCart(userId);
 
-        // 12. Publish OrderCreatedEvent for async processing (email, analytics, admin notification)
+        // 6. Publish OrderCreatedEvent for async processing (email, analytics, admin notification)
         publishOrderCreatedEvent(savedOrder, userId);
 
         log.info("Order {} created for user {}", savedOrder.getOrderNumber(), userId);
@@ -234,93 +165,54 @@ public class OrderService {
         return toOrderResponse(order);
     }
 
-    @Transactional
+    /**
+     * Status update WITHOUT refund still needs to stay transactional with the stock
+     * restore (handled inside orderTx.applyStatusTransition). The refund call to the
+     * payment gateway is done AFTER commit so we don't hold DB locks during that
+     * network call; if the refund fails we log and leave the order as PAID for manual
+     * reconciliation.
+     */
     public OrderResponse updateOrderStatus(Long orderId, OrderStatusUpdateRequest request) {
-        Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
-        OrderStatus newStatus = request.getStatus();
-        validateStatusTransition(order.getStatus(), newStatus);
+        OrderStatus[] transition = new OrderStatus[2]; // [old, new]
+        Order order = orderTx.applyStatusTransition(orderId, request.getStatus(), transition);
 
-        OrderStatus oldStatus = order.getStatus();
-        order.setStatus(newStatus);
-        orderRepository.save(order);
-
-        // Restore stock if cancelled
-        if (newStatus == OrderStatus.CANCELLED &&
-                (oldStatus == OrderStatus.PENDING || oldStatus == OrderStatus.CONFIRMED)) {
-            for (OrderItem item : order.getItems()) {
-                inventoryService.restoreStock(item.getProductId(), item.getVariantId(), item.getQuantity());
-            }
-            // Refund if paid
+        if (transition[1] == OrderStatus.CANCELLED &&
+                (transition[0] == OrderStatus.PENDING || transition[0] == OrderStatus.CONFIRMED)) {
             if (order.getPaymentStatus() == PaymentStatus.PAID && order.getPaymentReference() != null) {
-                paymentService.processRefund(order.getPaymentReference(), order.getTotalAmount());
-                order.setPaymentStatus(PaymentStatus.REFUNDED);
-                orderRepository.save(order);
+                try {
+                    paymentService.processRefund(order.getPaymentReference(), order.getTotalAmount());
+                    orderTx.markOrderRefunded(order.getId());
+                } catch (Exception e) {
+                    log.error("Refund failed for order {}: {}. Order left as PAID for manual reconciliation.",
+                            order.getOrderNumber(), e.getMessage());
+                }
             }
         }
 
-        log.info("Order {} status updated: {} -> {}", order.getOrderNumber(), oldStatus, newStatus);
+        log.info("Order {} status updated: {} -> {}", order.getOrderNumber(), transition[0], transition[1]);
         return toOrderResponse(order);
     }
 
-    @Transactional
+    /**
+     * Same pattern: DB work (cancellability check + stock restore, inside orderTx.doCancel)
+     * commits first; refund happens after, outside the transaction.
+     */
     public OrderResponse cancelOrder(Long userId, Long orderId) {
-        Order order = orderRepository.findByIdAndUserId(orderId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
+        Order order = orderTx.doCancel(userId, orderId);
 
-        if (!order.isCancellable()) {
-            throw new BusinessException(
-                    "Order cannot be cancelled. Current status: " + order.getStatus(),
-                    HttpStatus.BAD_REQUEST
-            );
-        }
-
-        // Restore stock
-        for (OrderItem item : order.getItems()) {
-            inventoryService.restoreStock(item.getProductId(), item.getVariantId(), item.getQuantity());
-        }
-
-        // Refund if paid (except COD - cash collected on delivery)
         if (order.getPaymentStatus() == PaymentStatus.PAID
                 && order.getPaymentMethod() != Order.PaymentMethod.COD) {
-            paymentService.refund(order.getPaymentReference());
-            order.setPaymentStatus(PaymentStatus.REFUNDED);
+            try {
+                paymentService.refund(order.getPaymentReference());
+                orderTx.markOrderRefunded(order.getId());
+            } catch (Exception e) {
+                log.error("Refund failed for order {}: {}. Order left as PAID for manual reconciliation.",
+                        order.getOrderNumber(), e.getMessage());
+            }
         }
-
-        order.setStatus(OrderStatus.CANCELLED);
-        orderRepository.save(order);
 
         log.info("Order {} cancelled by user {}", order.getOrderNumber(), userId);
         return toOrderResponse(order);
-    }
-
-    private void validateStatusTransition(OrderStatus from, OrderStatus to) {
-        boolean valid = switch (from) {
-            case PENDING -> to == OrderStatus.CONFIRMED || to == OrderStatus.CANCELLED;
-            case CONFIRMED -> to == OrderStatus.PROCESSING || to == OrderStatus.CANCELLED;
-            case PROCESSING -> to == OrderStatus.SHIPPING;
-            case SHIPPING -> to == OrderStatus.DELIVERED;
-            case DELIVERED, CANCELLED, RETURNED -> false;
-        };
-        if (!valid) {
-            throw new BusinessException(
-                    "Invalid status transition: " + from + " -> " + to,
-                    HttpStatus.BAD_REQUEST
-            );
-        }
-    }
-
-    private String generateOrderNumber() {
-        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
-        String uuid = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
-        return "ORD-" + timestamp + "-" + uuid;
-    }
-
-    private BigDecimal calculateShippingFee(BigDecimal subtotal) {
-        if (subtotal.compareTo(BigDecimal.valueOf(500000)) >= 0) {
-            return BigDecimal.ZERO; // Free shipping for orders >= 500k
-        }
-        return BigDecimal.valueOf(30000); // 30k shipping fee
     }
 
     private CheckoutResponse buildCheckoutResponse(Order order, String paymentUrl) {

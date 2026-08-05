@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
@@ -40,8 +41,17 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Optional<Order> findByOrderNumber(String orderNumber);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT o FROM Order o WHERE o.id = :id")
+    @Query("""
+        SELECT o FROM Order o
+        JOIN FETCH o.shippingAddress
+        LEFT JOIN FETCH o.items
+        WHERE o.id = :id
+    """)
     Optional<Order> findByIdWithLock(@Param("id") Long id);
+
+    @EntityGraph(attributePaths = { "shippingAddress", "items" })
+    @Query("SELECT o FROM Order o WHERE o.id = :id")
+    Optional<Order> findByIdWithDetails(@Param("id") Long id);
 
     List<Order> findByStatusAndCreatedAtBefore(OrderStatus status, LocalDateTime before);
 
@@ -60,4 +70,5 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     @Query("SELECT o FROM Order o ORDER BY o.createdAt DESC")
     List<Order> findTop5ByOrderByCreatedAtDesc(org.springframework.data.domain.Pageable pageable);
+
 }
