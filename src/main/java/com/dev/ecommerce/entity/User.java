@@ -60,5 +60,7 @@ public class User extends BaseEntity {
         this.email = email;
         this.password = password;
         this.fullName = fullName;
+        this.enabled = true;
+        this.roles = new HashSet<>();
     }
 }
