@@ -29,6 +29,8 @@ public class ProductVariantRequest {
     @PositiveOrZero
     private Integer stockQuantity;
 
-    @Size(max = 500)
+    @Size(max = 500, message = "Image URL must not exceed 500 characters")
     private String imageUrl;
+
+    private Boolean active;
 }

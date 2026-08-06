@@ -294,6 +294,7 @@ public class OrderService {
                         .productSlug(item.getProductSlug())
                         .productImageUrl(item.getProductImageUrl())
                         .variantId(item.getVariantId())
+                        .variantName(item.getVariantName())
                         .variantSku(item.getVariantSku())
                         .variantColor(item.getVariantColor())
                         .variantSize(item.getVariantSize())

@@ -93,9 +93,6 @@ class ProductServiceTest {
         product.setName("iPhone 15");
         product.setSlug("iphone-15");
         product.setDescription("Apple smartphone");
-        product.setBasePrice(BigDecimal.valueOf(999));
-        product.setDiscountPercent(BigDecimal.ZERO);
-        product.setStockQuantity(100);
         product.setActive(true);
         product.setFeatured(false);
         product.setCategory(category);
@@ -231,7 +228,7 @@ class ProductServiceTest {
 
         Page<Product> page = new PageImpl<>(List.of(product), PageRequest.of(0, 20), 1);
         when(productRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
-        when(productRepository.findWithDetailsById(1L)).thenReturn(Optional.of(product));
+        when(productRepository.findWithDetailsByIdFetch(1L)).thenReturn(Optional.of(product));
 
         PageResponse<ProductResponse> response = productService.search(request);
 
@@ -249,7 +246,7 @@ class ProductServiceTest {
 
         Page<Product> page = new PageImpl<>(List.of(product), PageRequest.of(0, 20), 1);
         when(productRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
-        when(productRepository.findWithDetailsById(1L)).thenReturn(Optional.of(product));
+        when(productRepository.findWithDetailsByIdFetch(1L)).thenReturn(Optional.of(product));
 
         PageResponse<ProductResponse> result = productService.search(request);
 
@@ -265,7 +262,7 @@ class ProductServiceTest {
 
         Page<Product> page = new PageImpl<>(List.of(product), PageRequest.of(0, 20), 1);
         when(productRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
-        when(productRepository.findWithDetailsById(1L)).thenReturn(Optional.of(product));
+        when(productRepository.findWithDetailsByIdFetch(1L)).thenReturn(Optional.of(product));
 
         PageResponse<ProductResponse> result = productService.search(request);
 
@@ -275,7 +272,7 @@ class ProductServiceTest {
     @Test
     void search_shouldParseValidSort() {
         ProductSearchRequest request = new ProductSearchRequest();
-        request.setSort("PRICE,asc");
+        request.setSort("NAME,asc");
         request.setPage(0);
         request.setSize(20);
 
@@ -399,16 +396,45 @@ class ProductServiceTest {
 
     @Test
     void removeVariant_shouldDeleteVariant() {
-        when(variantRepository.existsById(1L)).thenReturn(true);
+        ProductVariant variant = new ProductVariant(
+                product, "V1", "Black", "128GB",
+                BigDecimal.valueOf(999), 50, null
+        );
+        variant.setId(1L);
+        ProductVariant other = new ProductVariant(
+                product, "V2", "White", "256GB",
+                BigDecimal.valueOf(1099), 30, null
+        );
+        other.setId(2L);
+        product.getVariants().add(variant);
+        product.getVariants().add(other);
+
+        when(variantRepository.findById(1L)).thenReturn(Optional.of(variant));
 
         productService.removeVariant(1L);
 
-        verify(variantRepository).deleteById(1L);
+        verify(variantRepository).delete(variant);
+    }
+
+    @Test
+    void removeVariant_shouldRejectLastActiveVariant() {
+        ProductVariant variant = new ProductVariant(
+                product, "V1", "Black", "128GB",
+                BigDecimal.valueOf(999), 50, null
+        );
+        variant.setId(1L);
+        product.getVariants().add(variant);
+
+        when(variantRepository.findById(1L)).thenReturn(Optional.of(variant));
+
+        assertThatThrownBy(() -> productService.removeVariant(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("last active variant");
     }
 
     @Test
     void removeVariant_shouldThrowWhenNotFound() {
-        when(variantRepository.existsById(99L)).thenReturn(false);
+        when(variantRepository.findById(99L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> productService.removeVariant(99L))
                 .isInstanceOf(ResourceNotFoundException.class);
@@ -497,11 +523,16 @@ class ProductServiceTest {
         ProductRequest request = new ProductRequest();
         request.setName("iPhone 15");
         request.setDescription("Apple smartphone");
-        request.setBasePrice(BigDecimal.valueOf(999));
         request.setCategoryId(1L);
         request.setBrandId(1L);
         request.setActive(true);
         request.setFeatured(false);
+
+        ProductVariantRequest variant = new ProductVariantRequest();
+        variant.setSku("IPHONE15-DEFAULT");
+        variant.setPrice(BigDecimal.valueOf(999));
+        variant.setStockQuantity(100);
+        request.setVariants(List.of(variant));
         return request;
     }
 }

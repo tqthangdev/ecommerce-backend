@@ -19,4 +19,5 @@ public class ProductVariantResponse {
     private BigDecimal price;
     private int stockQuantity;
     private String imageUrl;
+    private boolean active;
 }

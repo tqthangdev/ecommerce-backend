@@ -2,6 +2,7 @@ package com.dev.ecommerce.repository;
 
 import com.dev.ecommerce.entity.ProductVariant;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -21,4 +22,8 @@ public interface ProductVariantRepository extends JpaRepository<ProductVariant, 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT v FROM ProductVariant v WHERE v.id = :id")
     Optional<ProductVariant> findByIdWithLock(@Param("id") Long id);
+
+    @EntityGraph(attributePaths = { "product", "product.images", "product.brand", "product.category" })
+    @Query("SELECT v FROM ProductVariant v WHERE v.id = :id")
+    Optional<ProductVariant> findByIdWithProduct(@Param("id") Long id);
 }

@@ -4,13 +4,12 @@ import com.dev.ecommerce.dto.response.CartItemResponse;
 import com.dev.ecommerce.dto.response.CartResponse;
 import com.dev.ecommerce.entity.Product;
 import com.dev.ecommerce.entity.ProductVariant;
-import com.dev.ecommerce.mapper.ProductMapper;
-import com.dev.ecommerce.repository.ProductRepository;
 import com.dev.ecommerce.repository.ProductVariantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -27,48 +26,67 @@ public class CartRedisService {
     private static final long CART_TTL_DAYS = 30;
 
     private final RedisTemplate<String, Object> redisTemplate;
-    private final ProductRepository productRepository;
     private final ProductVariantRepository variantRepository;
+    private final PromotionService promotionService;
 
-    public void addItem(Long userId, Long productId, Long variantId, int quantity) {
+    public void addItem(Long userId, Long variantId, int quantity) {
         String cartKey = cartKey(userId);
-        String itemField = itemField(productId, variantId);
+        String itemField = itemField(variantId);
+
+        // Keep the original addedAt if the item already exists, so re-adding or
+        // changing quantity does not reorder the cart.
+        long addedAt = System.currentTimeMillis();
+        Object existing = redisTemplate.opsForHash().get(cartKey, itemField);
+        if (existing instanceof Map) {
+            Object existingAddedAt = ((Map<?, ?>) existing).get("addedAt");
+            if (existingAddedAt != null) {
+                addedAt = toLong(existingAddedAt);
+            }
+        }
 
         Map<Object, Object> item = new HashMap<>();
-        item.put("productId", productId);
         item.put("variantId", variantId);
         item.put("quantity", quantity);
-        item.put("addedAt", System.currentTimeMillis());
+        item.put("addedAt", addedAt);
 
         redisTemplate.opsForHash().put(cartKey, itemField, item);
         redisTemplate.expire(cartKey, CART_TTL_DAYS, TimeUnit.DAYS);
     }
 
-    public void updateItemQuantity(Long userId, Long productId, Long variantId, int quantity) {
+    public void updateItemQuantity(Long userId, Long variantId, int quantity) {
         String cartKey = cartKey(userId);
-        String itemField = itemField(productId, variantId);
+        String itemField = itemField(variantId);
 
         if (Boolean.FALSE.equals(redisTemplate.opsForHash().hasKey(cartKey, itemField))) {
             return;
         }
 
         if (quantity <= 0) {
-            removeItem(userId, productId, variantId);
+            removeItem(userId, variantId);
             return;
         }
 
+        // Preserve the original addedAt so quantity updates don't reorder the cart.
+        long addedAt = System.currentTimeMillis();
+        Object existing = redisTemplate.opsForHash().get(cartKey, itemField);
+        if (existing instanceof Map) {
+            Object existingAddedAt = ((Map<?, ?>) existing).get("addedAt");
+            if (existingAddedAt != null) {
+                addedAt = toLong(existingAddedAt);
+            }
+        }
+
         Map<Object, Object> item = new HashMap<>();
-        item.put("productId", productId);
         item.put("variantId", variantId);
         item.put("quantity", quantity);
-        item.put("addedAt", System.currentTimeMillis());
+        item.put("addedAt", addedAt);
 
         redisTemplate.opsForHash().put(cartKey, itemField, item);
     }
 
-    public void removeItem(Long userId, Long productId, Long variantId) {
+    public void removeItem(Long userId, Long variantId) {
         String cartKey = cartKey(userId);
-        String itemField = itemField(productId, variantId);
+        String itemField = itemField(variantId);
         redisTemplate.opsForHash().delete(cartKey, itemField);
     }
 
@@ -88,6 +106,7 @@ public class CartRedisService {
         List<CartItemResponse> items = rawItems.values().stream()
                 .map(this::parseCartItem)
                 .filter(Objects::nonNull)
+                .sorted(Comparator.comparingLong(CartItemResponse::getAddedAt))
                 .collect(Collectors.toList());
 
         return buildCartResponse(items);
@@ -98,16 +117,15 @@ public class CartRedisService {
             return getCart(userId);
         }
 
-        // guest cart format: { "item:productId:variantId" -> { productId, variantId, quantity } }
+        // guest cart format: { "item:<variantId>" -> { variantId, quantity } }
         for (Object value : guestCartData.values()) {
             if (value instanceof Map) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> item = (Map<String, Object>) value;
-                Long productId = toLong(item.get("productId"));
                 Long variantId = toLong(item.get("variantId"));
                 Integer quantity = toInt(item.get("quantity"));
-                if (productId != null && quantity != null && quantity > 0) {
-                    addItem(userId, productId, variantId, quantity);
+                if (variantId != null && quantity != null && quantity > 0) {
+                    addItem(userId, variantId, quantity);
                 }
             }
         }
@@ -120,64 +138,58 @@ public class CartRedisService {
             if (!(raw instanceof Map)) return null;
             Map<String, Object> data = (Map<String, Object>) raw;
 
-            Long productId = toLong(data.get("productId"));
             Long variantId = toLong(data.get("variantId"));
             Integer quantity = toInt(data.get("quantity"));
+            Long addedAt = toLong(data.get("addedAt"));
 
-            if (productId == null || quantity == null) return null;
+            if (variantId == null || quantity == null) return null;
 
-            Optional<Product> productOpt = productRepository.findWithDetailsById(productId);
-            if (productOpt.isEmpty()) return null;
+            Optional<ProductVariant> variantOpt = variantRepository.findByIdWithProduct(variantId);
+            if (variantOpt.isEmpty()) return null;
 
-            Product product = productOpt.get();
-            BigDecimal unitPrice = product.getBasePrice();
-            BigDecimal effectivePrice = product.getEffectivePrice();
-            String imageUrl = product.getImagesSorted().stream()
-                    .findFirst()
-                    .map(img -> img.getImageUrl())
-                    .orElse(null);
-            String color = null;
-            String size = null;
-            String variantSku = null;
-            int stockAvailable = product.getStockQuantity();
+            ProductVariant variant = variantOpt.get();
+            if (!variant.isActive() || !variant.getProduct().isActive()) return null;
 
-            if (variantId != null) {
-                Optional<ProductVariant> variantOpt = variantRepository.findById(variantId);
-                if (variantOpt.isPresent()) {
-                    ProductVariant variant = variantOpt.get();
-                    unitPrice = variant.getPrice();
-                    effectivePrice = variant.getPrice();
-                    color = variant.getColor();
-                    size = variant.getSize();
-                    variantSku = variant.getSku();
-                    stockAvailable = variant.getStockQuantity();
-                    if (variant.getImageUrl() != null) {
-                        imageUrl = variant.getImageUrl();
-                    }
-                }
-            }
+            Product product = variant.getProduct();
+            BigDecimal unitPrice = variant.getPrice();
+            BigDecimal effectivePrice = promotionService.resolveEffectivePrice(variant);
+            String imageUrl = StringUtils.hasText(variant.getImageUrl())
+                    ? variant.getImageUrl()
+                    : product.getImagesSorted().stream()
+                            .findFirst()
+                            .map(img -> img.getImageUrl())
+                            .orElse(null);
 
             BigDecimal subtotal = effectivePrice.multiply(BigDecimal.valueOf(quantity));
 
             return CartItemResponse.builder()
-                    .productId(productId)
+                    .productId(product.getId())
                     .variantId(variantId)
                     .productName(product.getName())
                     .productSlug(product.getSlug())
-                    .variantSku(variantSku)
-                    .color(color)
-                    .size(size)
+                    .variantSku(variant.getSku())
+                    .variantName(buildVariantName(variant))
+                    .color(variant.getColor())
+                    .size(variant.getSize())
                     .imageUrl(imageUrl)
                     .quantity(quantity)
                     .unitPrice(unitPrice)
                     .effectivePrice(effectivePrice)
                     .subtotal(subtotal)
-                    .stockAvailable(stockAvailable)
+                    .stockAvailable(variant.getStockQuantity())
+                    .addedAt(addedAt != null ? addedAt : 0L)
                     .build();
         } catch (Exception e) {
             log.warn("Failed to parse cart item: {}", e.getMessage());
             return null;
         }
+    }
+
+    private String buildVariantName(ProductVariant variant) {
+        List<String> parts = new ArrayList<>();
+        if (StringUtils.hasText(variant.getColor())) parts.add(variant.getColor());
+        if (StringUtils.hasText(variant.getSize())) parts.add(variant.getSize());
+        return parts.isEmpty() ? variant.getSku() : String.join(" / ", parts);
     }
 
     private CartResponse buildCartResponse(List<CartItemResponse> items) {
@@ -211,8 +223,8 @@ public class CartRedisService {
         return CART_KEY_PREFIX + userId;
     }
 
-    private String itemField(Long productId, Long variantId) {
-        return CART_ITEM_FIELD_PREFIX + productId + ":" + (variantId != null ? variantId : "0");
+    private String itemField(Long variantId) {
+        return CART_ITEM_FIELD_PREFIX + variantId;
     }
 
     private Long toLong(Object v) {

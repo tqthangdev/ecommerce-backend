@@ -3,7 +3,6 @@ package com.dev.ecommerce.service;
 import com.dev.ecommerce.entity.ProductVariant;
 import com.dev.ecommerce.exception.BusinessException;
 import com.dev.ecommerce.exception.ResourceNotFoundException;
-import com.dev.ecommerce.repository.ProductRepository;
 import com.dev.ecommerce.repository.ProductVariantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +18,6 @@ import java.util.List;
 @RequiredArgsConstructor
 public class InventoryService {
 
-    private final ProductRepository productRepository;
     private final ProductVariantRepository variantRepository;
     // Cross-bean call (not self-invocation), so ProductService's @CacheEvict proxy
     // fires normally. Only evicts the single CACHE_PRODUCT_DETAIL entry for this
@@ -30,40 +28,33 @@ public class InventoryService {
      * Simple DTO so callers (e.g. checkout) can pass a whole set of lines
      * to be deducted atomically, in a deterministic lock order.
      */
-    public record StockLine(Long productId, Long variantId, int quantity) {}
+    public record StockLine(Long variantId, int quantity) {}
 
     /**
-     * Deducts stock using pessimistic locking (SELECT FOR UPDATE).
+     * Deducts stock from a variant using pessimistic locking (SELECT FOR UPDATE).
      * Throws exception if insufficient stock.
      */
     @Transactional
-    public void deductStock(Long productId, Long variantId, int quantity) {
+    public void deductStock(Long variantId, int quantity) {
         if (quantity <= 0) {
-            log.warn("deductStock called with non-positive quantity={} productId={} variantId={}",
-                    quantity, productId, variantId);
+            log.warn("deductStock called with non-positive quantity={} variantId={}",
+                    quantity, variantId);
             return;
         }
 
-        if (variantId != null) {
-            variantRepository.findByIdWithLock(variantId).ifPresentOrElse(
-                    variant -> deductVariantStock(variant, quantity),
-                    () -> { throw new ResourceNotFoundException("ProductVariant", variantId); }
-            );
-        } else {
-            productRepository.findByIdWithLock(productId).ifPresentOrElse(
-                    product -> deductProductStock(product, quantity),
-                    () -> { throw new ResourceNotFoundException("Product", productId); }
-            );
-        }
+        variantRepository.findByIdWithLock(variantId).ifPresentOrElse(
+                variant -> deductVariantStock(variant, quantity),
+                () -> { throw new ResourceNotFoundException("ProductVariant", variantId); }
+        );
     }
 
     /**
      * Deducts stock for multiple lines (e.g. a whole order) inside ONE transaction.
      *
-     * IMPORTANT: lines are sorted into a deterministic order (by variantId if present,
-     * else productId) before locking. This prevents deadlocks that can otherwise happen
-     * when two concurrent checkouts touch the same set of products/variants but in a
-     * different order (e.g. because their carts were built in a different sequence).
+     * IMPORTANT: lines are sorted into a deterministic order (by variantId) before
+     * locking. This prevents deadlocks that can otherwise happen when two concurrent
+     * checkouts touch the same set of variants but in a different order (e.g. because
+     * their carts were built in a different sequence).
      *
      * Callers (OrderService.checkout) should use this instead of looping and calling
      * deductStock(...) once per item.
@@ -71,41 +62,28 @@ public class InventoryService {
     @Transactional
     public void deductStockBatch(List<StockLine> lines) {
         lines.stream()
-                .sorted(Comparator.comparing(
-                        (StockLine l) -> l.variantId() != null ? "V" + l.variantId() : "P" + l.productId()))
-                .forEach(line -> deductStock(line.productId(), line.variantId(), line.quantity()));
+                .sorted(Comparator.comparing((StockLine l) -> "V" + l.variantId()))
+                .forEach(line -> deductStock(line.variantId(), line.quantity()));
     }
 
     /**
-     * Restores stock (called when order cancelled/timeout).
+     * Restores stock on a variant (called when order cancelled/timeout).
      */
     @Transactional
-    public void restoreStock(Long productId, Long variantId, int quantity) {
+    public void restoreStock(Long variantId, int quantity) {
         if (quantity <= 0) {
-            log.warn("restoreStock called with non-positive quantity={} productId={} variantId={}",
-                    quantity, productId, variantId);
+            log.warn("restoreStock called with non-positive quantity={} variantId={}",
+                    quantity, variantId);
             return;
         }
 
-        if (variantId != null) {
-            variantRepository.findByIdWithLock(variantId).ifPresent(
-                    variant -> {
-                        variant.setStockQuantity(variant.getStockQuantity() + quantity);
-                        variantRepository.save(variant);
-                        // Keep Product.stockQuantity in sync when restoring variant stock too.
-                        productRepository.adjustStockQuantity(variant.getProduct().getId(), quantity);
-                        productService.evictProductDetailCache(variant.getProduct().getId());
-                    }
-            );
-        } else {
-            productRepository.findByIdWithLock(productId).ifPresent(
-                    product -> {
-                        product.setStockQuantity(product.getStockQuantity() + quantity);
-                        productRepository.save(product);
-                        productService.evictProductDetailCache(product.getId());
-                    }
-            );
-        }
+        variantRepository.findByIdWithLock(variantId).ifPresent(
+                variant -> {
+                    variant.setStockQuantity(variant.getStockQuantity() + quantity);
+                    variantRepository.save(variant);
+                    productService.evictProductDetailCache(variant.getProduct().getId());
+                }
+        );
     }
 
     /**
@@ -116,68 +94,27 @@ public class InventoryService {
      * that is authoritative. Do not rely on this alone to prevent overselling.
      */
     @Transactional(readOnly = true)
-    public void validateStock(Long productId, Long variantId, int requestedQty) {
+    public void validateStock(Long variantId, int requestedQty) {
         if (requestedQty <= 0) return;
 
-        if (variantId != null) {
-            ProductVariant variant = variantRepository.findById(variantId)
-                    .orElseThrow(() -> new ResourceNotFoundException("ProductVariant", variantId));
-            if (variant.getStockQuantity() < requestedQty) {
-                log.warn(
-                        "Insufficient stock. Product={}, SKU={}, variantId={}, requested={}, available={}",
-                        variant.getProduct().getName(),
-                        variant.getSku(),
-                        variant.getId(),
-                        requestedQty,
-                        variant.getStockQuantity()
-                );
-
-                throw new BusinessException(
-                        "Not enough stock for " + variant.getProduct().getName()
-                                + ". Available: " + variant.getStockQuantity(),
-                        HttpStatus.BAD_REQUEST
-                );
-            }
-        } else {
-            var product = productRepository.findById(productId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Product", productId));
-            if (product.getStockQuantity() < requestedQty) {
-                log.warn(
-                        "Insufficient stock. Product={}, productId={}, requested={}, available={}",
-                        product.getName(),
-                        product.getId(),
-                        requestedQty,
-                        product.getStockQuantity()
-                );
-
-                throw new BusinessException(
-                        "Not enough stock for " + product.getName()
-                                + ". Available: " + product.getStockQuantity(),
-                        HttpStatus.BAD_REQUEST
-                );
-            }
-        }
-    }
-
-    private void deductProductStock(com.dev.ecommerce.entity.Product product, int quantity) {
-        if (product.getStockQuantity() < quantity) {
+        ProductVariant variant = variantRepository.findById(variantId)
+                .orElseThrow(() -> new ResourceNotFoundException("ProductVariant", variantId));
+        if (variant.getStockQuantity() < requestedQty) {
             log.warn(
-                    "Insufficient stock. Product={}, productId={}, requested={}, available={}",
-                    product.getName(),
-                    product.getId(),
-                    quantity,
-                    product.getStockQuantity()
+                    "Insufficient stock. Product={}, SKU={}, variantId={}, requested={}, available={}",
+                    variant.getProduct().getName(),
+                    variant.getSku(),
+                    variant.getId(),
+                    requestedQty,
+                    variant.getStockQuantity()
             );
 
             throw new BusinessException(
-                    "Not enough stock for " + product.getName()
-                            + ". Available: " + product.getStockQuantity(),
+                    "Not enough stock for " + variant.getProduct().getName()
+                            + ". Available: " + variant.getStockQuantity(),
                     HttpStatus.BAD_REQUEST
             );
         }
-        product.setStockQuantity(product.getStockQuantity() - quantity);
-        productRepository.save(product);
-        productService.evictProductDetailCache(product.getId());
     }
 
     private void deductVariantStock(ProductVariant variant, int quantity) {
@@ -191,7 +128,7 @@ public class InventoryService {
                     variant.getStockQuantity()
             );
             throw new BusinessException(
-                    "Not enough stock for " 
+                    "Not enough stock for "
                             + variant.getProduct().getName()
                             + ". Available: "
                             + variant.getStockQuantity(),
@@ -200,12 +137,6 @@ public class InventoryService {
         }
         variant.setStockQuantity(variant.getStockQuantity() - quantity);
         variantRepository.save(variant);
-
-        // Keep the denormalized Product.stockQuantity (sum of all variants) in sync.
-        // Uses an atomic UPDATE (no extra SELECT/lock, no full recalculateProduct scan)
-        // since only the total changes here — variant prices/count are untouched, so
-        // Product.basePrice does not need to be recomputed.
-        productRepository.adjustStockQuantity(variant.getProduct().getId(), -quantity);
         productService.evictProductDetailCache(variant.getProduct().getId());
     }
 }

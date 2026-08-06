@@ -24,6 +24,11 @@ public class ProductImage extends BaseEntity {
     @JsonIgnore
     private Product product;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "variant_id")
+    @JsonIgnore
+    private ProductVariant variant;
+
     @Column(name = "image_url", nullable = false, length = 500)
     private String imageUrl;
 
@@ -38,7 +43,13 @@ public class ProductImage extends BaseEntity {
 
     public ProductImage(Product product, String imageUrl, String altText,
                         int displayOrder, boolean primary) {
+        this(product, null, imageUrl, altText, displayOrder, primary);
+    }
+
+    public ProductImage(Product product, ProductVariant variant, String imageUrl,
+                        String altText, int displayOrder, boolean primary) {
         this.product = product;
+        this.variant = variant;
         this.imageUrl = imageUrl;
         this.altText = altText;
         this.displayOrder = displayOrder;

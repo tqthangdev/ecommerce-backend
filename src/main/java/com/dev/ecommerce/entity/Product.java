@@ -13,7 +13,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -35,15 +34,6 @@ public class Product extends BaseEntity {
 
     @Column(columnDefinition = "TEXT")
     private String description;
-
-    @Column(name = "base_price", nullable = false, precision = 12, scale = 2)
-    private BigDecimal basePrice = BigDecimal.ZERO;
-
-    @Column(name = "discount_percent", nullable = false, precision = 5, scale = 2)
-    private BigDecimal discountPercent = BigDecimal.ZERO;
-
-    @Column(name = "stock_quantity", nullable = false)
-    private int stockQuantity = 0;
 
     @Column(name = "is_active", nullable = false)
     private boolean active = true;
@@ -69,18 +59,8 @@ public class Product extends BaseEntity {
     private Set<ProductImage> images = new HashSet<>();
 
     public List<ProductImage> getImagesSorted() {
-        return new java.util.ArrayList<>(images).stream()
+        return new ArrayList<>(images).stream()
                 .sorted(Comparator.comparingInt(ProductImage::getDisplayOrder))
                 .toList();
-    }
-
-    public BigDecimal getEffectivePrice() {
-        if (discountPercent == null || discountPercent.signum() <= 0) {
-            return basePrice;
-        }
-        var multiplier = BigDecimal.ONE.subtract(
-                discountPercent.divide(BigDecimal.valueOf(100))
-        );
-        return basePrice.multiply(multiplier).setScale(2, java.math.RoundingMode.HALF_UP);
     }
 }

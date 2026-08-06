@@ -39,7 +39,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.math.BigDecimal;
 import java.util.UUID;
 
 @Slf4j
@@ -54,6 +53,7 @@ public class ProductService {
     private final ProductImageRepository imageRepository;
     private final FileStorageService fileStorageService;
     private final SlugService slugService;
+    private final PromotionService promotionService;
 
     @Transactional
     @CacheEvict(value = {CacheConfig.CACHE_PRODUCTS, CacheConfig.CACHE_PRODUCT_DETAIL}, allEntries = true)
@@ -70,15 +70,6 @@ public class ProductService {
         product.setName(request.getName());
         product.setSlug(slug);
         product.setDescription(request.getDescription());
-        if (request.getBasePrice() != null) {
-            product.setBasePrice(request.getBasePrice());
-        }
-        product.setDiscountPercent(
-                request.getDiscountPercent() == null ? BigDecimal.ZERO : request.getDiscountPercent()
-        );
-        if (request.getStockQuantity() != null) {
-            product.setStockQuantity(request.getStockQuantity());
-        }
         if (request.getActive() != null) {
             product.setActive(request.getActive());
         }
@@ -88,8 +79,26 @@ public class ProductService {
         product.setCategory(category);
         product.setBrand(brand);
 
+        for (ProductVariantRequest variantRequest : request.getVariants()) {
+            ProductVariant variant = new ProductVariant(
+                    product,
+                    variantRequest.getSku(),
+                    variantRequest.getColor(),
+                    variantRequest.getSize(),
+                    variantRequest.getPrice(),
+                    variantRequest.getStockQuantity() == null ? 0 : variantRequest.getStockQuantity(),
+                    variantRequest.getImageUrl()
+            );
+            variant.setActive(variantRequest.getActive() == null || variantRequest.getActive());
+            product.getVariants().add(variant);
+        }
+
+        if (product.getVariants().stream().noneMatch(ProductVariant::isActive)) {
+            throw new BusinessException("At least one active variant is required", HttpStatus.BAD_REQUEST);
+        }
+
         Product saved = productRepository.save(product);
-        return ProductMapper.toResponse(loadWithDetails(saved.getId()));
+        return toProductResponse(loadWithDetails(saved.getId()));
     }
 
     @Transactional
@@ -109,9 +118,6 @@ public class ProductService {
         product.setName(request.getName());
         product.setSlug(slug);
         product.setDescription(request.getDescription());
-        product.setDiscountPercent(
-                request.getDiscountPercent() == null ? BigDecimal.ZERO : request.getDiscountPercent()
-        );
         if (request.getActive() != null) {
             product.setActive(request.getActive());
         }
@@ -121,7 +127,7 @@ public class ProductService {
         product.setCategory(category);
         product.setBrand(brand);
 
-        return ProductMapper.toResponse(loadWithDetails(product.getId()));
+        return toProductResponse(loadWithDetails(product.getId()));
     }
 
     @Transactional
@@ -141,7 +147,7 @@ public class ProductService {
     @Transactional(readOnly = true)
     @Cacheable(value = CacheConfig.CACHE_PRODUCT_DETAIL, key = "#id")
     public ProductResponse getById(Long id) {
-        return ProductMapper.toResponse(loadWithDetails(id));
+        return toProductResponse(loadWithDetails(id));
     }
 
     /**
@@ -160,7 +166,7 @@ public class ProductService {
     @Transactional(readOnly = true)
     // @Cacheable disabled: Redis serializer doesn't support LocalDateTime
     public ProductResponse getBySlug(String slug) {
-        return ProductMapper.toResponse(
+        return toProductResponse(
                 productRepository.findWithDetailsBySlug(slug)
                         .orElseThrow(() -> new ResourceNotFoundException("Product", slug))
         );
@@ -178,7 +184,7 @@ public class ProductService {
                 .and(ProductSpecifications.isActive(request.getActive()));
 
         Page<Product> page = productRepository.findAll(spec, pageable);
-        return PageResponse.from(page, p -> ProductMapper.toResponse(
+        return PageResponse.from(page, p -> toProductResponse(
                 productRepository.findWithDetailsByIdFetch(p.getId()).orElse(p)
         ));
     }
@@ -207,12 +213,11 @@ public class ProductService {
                 request.getStockQuantity() == null ? 0 : request.getStockQuantity(),
                 request.getImageUrl()
         );
+        variant.setActive(request.getActive() == null || request.getActive());
         variantRepository.save(variant);
-        recalculateProduct(product.getId());
         return ProductMapper.toResponse(variant);
     }
 
-    // See note on addVariant regarding @CacheEvict + self-invocation.
     @Transactional
     @CacheEvict(value = {CacheConfig.CACHE_PRODUCTS, CacheConfig.CACHE_PRODUCT_DETAIL}, allEntries = true)
     public ProductVariantResponse updateVariant(Long variantId, ProductVariantRequest request) {
@@ -221,6 +226,7 @@ public class ProductService {
         if (!variant.getSku().equals(request.getSku()) && variantRepository.existsBySku(request.getSku())) {
             throw new BusinessException("SKU already exists: " + request.getSku(), HttpStatus.CONFLICT);
         }
+        boolean wasActive = variant.isActive();
         variant.setSku(request.getSku());
         variant.setColor(request.getColor());
         variant.setSize(request.getSize());
@@ -229,8 +235,16 @@ public class ProductService {
             variant.setStockQuantity(request.getStockQuantity());
         }
         variant.setImageUrl(request.getImageUrl());
+        variant.setActive(request.getActive() == null || request.getActive());
         variantRepository.save(variant);
-        recalculateProduct(variant.getProduct().getId());
+
+        // Never leave a product without an active variant.
+        if (wasActive && !variant.isActive()
+                && variant.getProduct().getVariants().stream()
+                        .filter(v -> !v.getId().equals(variantId))
+                        .noneMatch(ProductVariant::isActive)) {
+            throw new BusinessException("At least one active variant is required", HttpStatus.BAD_REQUEST);
+        }
         return ProductMapper.toResponse(variant);
     }
 
@@ -242,45 +256,13 @@ public class ProductService {
                 .orElseThrow(() -> new ResourceNotFoundException("ProductVariant", variantId));
         Long productId = variant.getProduct().getId();
         Product product = variant.getProduct();
+        if (product.getVariants().stream()
+                .filter(v -> !v.getId().equals(variantId))
+                .noneMatch(ProductVariant::isActive)) {
+            throw new BusinessException("Cannot remove the last active variant", HttpStatus.BAD_REQUEST);
+        }
         product.getVariants().remove(variant);
         variantRepository.delete(variant);
-        recalculateProduct(productId);
-    }
-
-    /**
-     * Full resync of Product.stockQuantity (sum of variants) and basePrice (cheapest
-     * variant price) from scratch. Used whenever the variant SET or a variant PRICE
-     * changes (add/update/remove variant here in ProductService).
-     *
-     * Do NOT call this from order checkout/cancel flows — those only change quantities,
-     * never price or the variant set, so they use the lightweight atomic
-     * ProductRepository.adjustStockQuantity(id, delta) in InventoryService instead
-     * (cheaper, and avoids reloading all variants under an already-locked row).
-     *
-     * No @CacheEvict here on purpose: when called externally (e.g. an admin "resync"
-     * endpoint) callers should evict at their own call site; when called internally
-     * from addVariant/updateVariant/removeVariant, the eviction on those methods
-     * already covers it (see note above about self-invocation).
-     */
-    @Transactional
-    public void recalculateProduct(Long productId) {
-        Product product = productRepository.findWithDetailsById(productId)
-                .orElseThrow(() -> new ResourceNotFoundException("Product", productId));
-
-        int total = product.getVariants().stream()
-                .mapToInt(ProductVariant::getStockQuantity)
-                .sum();
-
-        product.setStockQuantity(total);
-
-        BigDecimal cheapest = product.getVariants().stream()
-                .map(ProductVariant::getPrice)
-                .min(BigDecimal::compareTo)
-                .orElse(product.getBasePrice());
-
-        product.setBasePrice(cheapest);
-
-        productRepository.save(product);
     }
 
     @Transactional
@@ -342,6 +324,10 @@ public class ProductService {
     private Product loadWithDetails(Long id) {
         return productRepository.findWithDetailsById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", id));
+    }
+
+    private ProductResponse toProductResponse(Product product) {
+        return ProductMapper.toResponse(product, promotionService::resolveEffectivePrice);
     }
 
     private Pageable buildPageable(ProductSearchRequest request) {

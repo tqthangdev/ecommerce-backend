@@ -28,13 +28,23 @@ public final class ProductSpecifications {
             if (minPrice == null && maxPrice == null) {
                 return cb.conjunction();
             }
+
+            jakarta.persistence.criteria.Subquery<Long> sub = query.subquery(Long.class);
+            jakarta.persistence.criteria.Root<?> variant = sub.from(
+                    com.dev.ecommerce.entity.ProductVariant.class
+            );
+            sub.select(variant.get("id"));
+            sub.where(cb.equal(variant.get("product"), root));
+
             if (minPrice != null && maxPrice != null) {
-                return cb.between(root.get("basePrice"), minPrice, maxPrice);
+                sub.where(cb.between(variant.get("price"), minPrice, maxPrice));
+            } else if (minPrice != null) {
+                sub.where(cb.greaterThanOrEqualTo(variant.get("price"), minPrice));
+            } else {
+                sub.where(cb.lessThanOrEqualTo(variant.get("price"), maxPrice));
             }
-            if (minPrice != null) {
-                return cb.greaterThanOrEqualTo(root.get("basePrice"), minPrice);
-            }
-            return cb.lessThanOrEqualTo(root.get("basePrice"), maxPrice);
+
+            return cb.exists(sub);
         };
     }
 

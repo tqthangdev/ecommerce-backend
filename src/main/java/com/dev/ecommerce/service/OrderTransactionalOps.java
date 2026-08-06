@@ -113,6 +113,7 @@ class OrderTransactionalOps {
                         cartItem.getProductName(),
                         cartItem.getProductSlug(),
                         cartItem.getVariantId(),
+                        cartItem.getVariantName(),
                         cartItem.getVariantSku(),
                         cartItem.getColor(),
                         cartItem.getSize(),
@@ -124,7 +125,7 @@ class OrderTransactionalOps {
             }
 
             List<InventoryService.StockLine> lines = cart.getItems().stream()
-                    .map(ci -> new InventoryService.StockLine(ci.getProductId(), ci.getVariantId(), ci.getQuantity()))
+                    .map(ci -> new InventoryService.StockLine(ci.getVariantId(), ci.getQuantity()))
                     .toList();
             inventoryService.deductStockBatch(lines);
 
@@ -161,7 +162,7 @@ class OrderTransactionalOps {
         if (newStatus == OrderStatus.CANCELLED &&
                 (oldStatus == OrderStatus.PENDING || oldStatus == OrderStatus.CONFIRMED)) {
             for (OrderItem item : order.getItems()) {
-                inventoryService.restoreStock(item.getProductId(), item.getVariantId(), item.getQuantity());
+                inventoryService.restoreStock(item.getVariantId(), item.getQuantity());
             }
         }
 
@@ -180,7 +181,7 @@ class OrderTransactionalOps {
 
     @Transactional
     Order doCancel(Long userId, Long orderId) {
-        Order order = orderRepository.findByIdAndUserId(orderId, userId)
+        Order order = orderRepository.findByIdAndUserIdWithDetails(orderId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
 
         if (!order.isCancellable()) {
@@ -191,7 +192,7 @@ class OrderTransactionalOps {
         }
 
         for (OrderItem item : order.getItems()) {
-            inventoryService.restoreStock(item.getProductId(), item.getVariantId(), item.getQuantity());
+            inventoryService.restoreStock(item.getVariantId(), item.getQuantity());
         }
 
         order.setStatus(OrderStatus.CANCELLED);

@@ -44,6 +44,9 @@ public class ProductVariant extends BaseEntity {
     @Column(name = "image_url", length = 500)
     private String imageUrl;
 
+    @Column(name = "is_active", nullable = false)
+    private boolean active = true;
+
     public ProductVariant(Product product, String sku, String color, String size,
                           BigDecimal price, int stockQuantity, String imageUrl) {
         this.product = product;

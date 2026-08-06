@@ -44,23 +44,21 @@ public class CartController {
     @Operation(summary = "Update cart item quantity")
     public ApiResponse<CartResponse> updateItem(
             @AuthenticationPrincipal UserPrincipal principal,
-            @RequestParam Long productId,
-            @RequestParam(required = false) Long variantId,
+            @RequestParam Long variantId,
             @Valid @RequestBody UpdateCartItemRequest request
     ) {
         return ApiResponse.success("Cart updated",
-                cartService.updateItem(principal.getId(), productId, variantId, request));
+                cartService.updateItem(principal.getId(), variantId, request));
     }
 
     @DeleteMapping("/items")
     @Operation(summary = "Remove item from cart")
     public ApiResponse<CartResponse> removeItem(
             @AuthenticationPrincipal UserPrincipal principal,
-            @RequestParam Long productId,
-            @RequestParam(required = false) Long variantId
+            @RequestParam Long variantId
     ) {
         return ApiResponse.success("Item removed",
-                cartService.removeItem(principal.getId(), productId, variantId));
+                cartService.removeItem(principal.getId(), variantId));
     }
 
     @DeleteMapping

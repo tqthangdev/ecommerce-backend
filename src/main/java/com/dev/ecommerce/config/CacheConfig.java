@@ -26,6 +26,8 @@ public class CacheConfig {
     public static final String CACHE_PRODUCTS = "products";
     public static final String CACHE_PRODUCT_DETAIL = "product-detail";
     public static final String CACHE_COUPONS = "coupons";
+    public static final String CACHE_PROMOTIONS = "promotions";
+    public static final String CACHE_PROMOTION_PRICE = "promotion-price";
 
     @Bean
     CacheManager cacheManager(RedisConnectionFactory factory) {
@@ -49,7 +51,9 @@ public class CacheConfig {
                 CACHE_BRANDS, defaultConfig.entryTtl(Duration.ofMinutes(30)),
                 CACHE_PRODUCTS, defaultConfig.entryTtl(Duration.ofMinutes(10)),
                 CACHE_PRODUCT_DETAIL, defaultConfig.entryTtl(Duration.ofMinutes(5)),
-                CACHE_COUPONS, defaultConfig.entryTtl(Duration.ofMinutes(15))
+                CACHE_COUPONS, defaultConfig.entryTtl(Duration.ofMinutes(15)),
+                CACHE_PROMOTIONS, defaultConfig.entryTtl(Duration.ofMinutes(15)),
+                CACHE_PROMOTION_PRICE, defaultConfig.entryTtl(Duration.ofMinutes(5))
         );
 
         return RedisCacheManager.builder(factory)

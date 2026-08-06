@@ -18,10 +18,9 @@ public class ProductResponse {
     private String name;
     private String slug;
     private String description;
-    private BigDecimal basePrice;
-    private BigDecimal effectivePrice;
-    private BigDecimal discountPercent;
-    private int stockQuantity;
+    private BigDecimal minPrice;
+    private BigDecimal maxPrice;
+    private BigDecimal salePrice;
     private boolean active;
     private boolean featured;
     private long viewCount;

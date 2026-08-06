@@ -50,7 +50,6 @@ public class OrderScheduler {
                 // Restore stock
                 for (OrderItem item : order.getItems()) {
                     inventoryService.restoreStock(
-                            item.getProductId(),
                             item.getVariantId(),
                             item.getQuantity()
                     );

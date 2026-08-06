@@ -34,8 +34,11 @@ public class OrderItem {
     @Column(name = "product_image_url")
     private String productImageUrl;
 
-    @Column(name = "variant_id")
+    @Column(name = "variant_id", nullable = false)
     private Long variantId;
+
+    @Column(name = "variant_name", length = 255)
+    private String variantName;
 
     @Column(name = "variant_sku", length = 80)
     private String variantSku;
@@ -59,13 +62,14 @@ public class OrderItem {
     private BigDecimal subtotal;
 
     public OrderItem(Long productId, String productName, String productSlug,
-                     Long variantId, String variantSku, String variantColor,
-                     String variantSize, int quantity, BigDecimal unitPrice,
-                     BigDecimal effectivePrice) {
+                     Long variantId, String variantName, String variantSku,
+                     String variantColor, String variantSize, int quantity,
+                     BigDecimal unitPrice, BigDecimal effectivePrice) {
         this.productId = productId;
         this.productName = productName;
         this.productSlug = productSlug;
         this.variantId = variantId;
+        this.variantName = variantName;
         this.variantSku = variantSku;
         this.variantColor = variantColor;
         this.variantSize = variantSize;

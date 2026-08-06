@@ -13,6 +13,7 @@ public class CartItemResponse {
     private String productName;
     private String productSlug;
     private String variantSku;
+    private String variantName;
     private String color;
     private String size;
     private String imageUrl;
@@ -21,4 +22,5 @@ public class CartItemResponse {
     private BigDecimal effectivePrice;
     private BigDecimal subtotal;
     private int stockAvailable;
+    private long addedAt;
 }

@@ -53,6 +53,10 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Query("SELECT o FROM Order o WHERE o.id = :id")
     Optional<Order> findByIdWithDetails(@Param("id") Long id);
 
+    @EntityGraph(attributePaths = { "shippingAddress", "items" })
+    @Query("SELECT o FROM Order o WHERE o.id = :id AND o.userId = :userId")
+    Optional<Order> findByIdAndUserIdWithDetails(@Param("id") Long id, @Param("userId") Long userId);
+
     List<Order> findByStatusAndCreatedAtBefore(OrderStatus status, LocalDateTime before);
 
     @Modifying
