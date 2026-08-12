@@ -1,6 +1,7 @@
 package com.dev.ecommerce.repository.specification;
 
 import com.dev.ecommerce.entity.Product;
+import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.util.StringUtils;
 
@@ -34,14 +35,24 @@ public final class ProductSpecifications {
                     com.dev.ecommerce.entity.ProductVariant.class
             );
             sub.select(variant.get("id"));
-            sub.where(cb.equal(variant.get("product"), root));
+
+            Predicate isSameProduct = cb.equal(variant.get("product"), root);
 
             if (minPrice != null && maxPrice != null) {
-                sub.where(cb.between(variant.get("price"), minPrice, maxPrice));
+                sub.where(
+                        isSameProduct,
+                        cb.between(variant.get("price"), minPrice, maxPrice)
+                );
             } else if (minPrice != null) {
-                sub.where(cb.greaterThanOrEqualTo(variant.get("price"), minPrice));
+                sub.where(
+                        isSameProduct,
+                        cb.greaterThanOrEqualTo(variant.get("price"), minPrice)
+                );
             } else {
-                sub.where(cb.lessThanOrEqualTo(variant.get("price"), maxPrice));
+                sub.where(
+                        isSameProduct,
+                        cb.lessThanOrEqualTo(variant.get("price"), maxPrice)
+                );
             }
 
             return cb.exists(sub);

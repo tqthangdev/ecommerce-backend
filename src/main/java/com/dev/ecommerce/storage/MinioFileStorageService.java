@@ -107,7 +107,7 @@ public class MinioFileStorageService implements FileStorageService {
     public String getUrl(String key) {
         if (!StringUtils.hasText(key)) return null;
         var minio = properties.getMinio();
-        // Trả public URL trực tiếp (cần bucket public)
+        // Return the public URL directly (bucket must be public)
         return joinUrl(minio.getPublicUrl(), minio.getBucket(), key);
     }
 

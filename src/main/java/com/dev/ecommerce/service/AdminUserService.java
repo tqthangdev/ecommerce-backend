@@ -89,8 +89,8 @@ public class AdminUserService {
         /*
          * OWNER protection
          *
-         * ADMIN không được sửa OWNER
-         * OWNER chỉ sửa được chính mình
+         * ADMIN cannot modify an OWNER
+         * OWNER can only modify themselves
          */
         if (hasOwnerRole(user)
                 && !isSameUser(id)) {
@@ -102,7 +102,7 @@ public class AdminUserService {
 
 
         /*
-         * Không cho disable OWNER
+         * OWNER cannot be disabled
          */
         if (hasOwnerRole(user)
                 && Boolean.FALSE.equals(request.getEnabled())) {
@@ -137,7 +137,7 @@ public class AdminUserService {
 
 
         /*
-         * Password bỏ trống => giữ password cũ
+         * Blank password => keep the existing password
          */
         if (request.getPassword() != null
                 && !request.getPassword().isBlank()) {
@@ -162,8 +162,8 @@ public class AdminUserService {
 
 
             /*
-             * Nếu target là OWNER
-             * không được bỏ OWNER role
+             * If the target is an OWNER,
+             * the OWNER role cannot be removed
              */
             if (hasOwnerRole(user)
                     && !request.getRoles().contains("OWNER")) {
@@ -258,7 +258,7 @@ public class AdminUserService {
     ) {
 
         /*
-         * Chỉ OWNER được cấp OWNER
+         * Only OWNER can be granted the OWNER role
          */
         if (roles.contains("OWNER")
                 && !currentUserIsOwner()) {
@@ -270,7 +270,7 @@ public class AdminUserService {
 
 
         /*
-         * ADMIN không được tự nâng quyền ADMIN
+         * ADMIN cannot self-promote to ADMIN
          */
         if (roles.contains("ADMIN")
                 && !currentUserIsOwner()) {

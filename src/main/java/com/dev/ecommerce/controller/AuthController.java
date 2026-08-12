@@ -76,8 +76,8 @@ public class AuthController {
         );
     }
 
-    // Set cookie xong thì xoá refreshToken khỏi object trước khi trả về client,
-    // tránh lộ token qua response body (làm mất tác dụng httpOnly).
+    // Clear the refreshToken from the object before returning it to the client,
+    // to avoid leaking the token through the response body (which would defeat httpOnly).
     private AuthResponse sanitizeAuthResponse(AuthResponse authResponse) {
         authResponse.setRefreshToken(null);
         return authResponse;
